@@ -1,0 +1,7 @@
+theme = catppuccin-macchiato
+
+background-opacity = 0.8
+background-blur = true
+
+font-family = "Hack Nerd Font"
+font-family = "D2Coding"
