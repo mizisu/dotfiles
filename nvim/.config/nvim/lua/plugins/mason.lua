@@ -10,6 +10,9 @@ return {
       "ruff",
       "ruff-lsp",
       "pyright",
+
+      -- Rust
+      "rust-analyzer",
     },
   },
 }
