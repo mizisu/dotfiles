@@ -8,7 +8,6 @@ return {
       "debugpy",
       "mypy",
       "ruff",
-      "ruff-lsp",
       "pyright",
 
       -- Rust
