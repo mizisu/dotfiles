@@ -12,7 +12,9 @@ return {
                             useLibraryCodeForTypes = true,
                             -- diagnosticMode = "workspace",
                             ignore = {'*'}
-                        }
+                        },
+                        venvPath = "./",
+                        venv = ".venv"
                     }
                 }
             }

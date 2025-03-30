@@ -6,4 +6,7 @@ background-blur = true
 font-family = "Hack Nerd Font"
 font-family = "D2Coding"
 
- macos-option-as-alt = true
+macos-option-as-alt = true
+
+macos-titlebar-style = hidden
+
