@@ -17,7 +17,7 @@ return {
 
       { "<leader>ta", function() require("neotest").run.attach() end, desc = "Attach to the nearest test" },
 
-      { "<leader>tx", function() require("neotest").run.stop() end, desc = "Stop the test" },
+      { "<leader>tu", function() require("neotest").run.stop() end, desc = "Stop the test" },
       
       { "<leader>to", function() require("neotest").output.open({ enter = true }) end, desc = "Show test ouput" },
       { "<leader>tp", function() require("neotest").output_panel.toggle() end, desc = "Toggle test output panel" },

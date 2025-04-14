@@ -8,5 +8,11 @@ font-family = "D2Coding"
 
 macos-option-as-alt = true
 
-macos-titlebar-style = hidden
+keybind = alt+left=unbind
+keybind = alt+right=unbind
 
+keybind = alt+h=unbind
+keybind = alt+l=unbind
+
+
+macos-titlebar-style = hidden
