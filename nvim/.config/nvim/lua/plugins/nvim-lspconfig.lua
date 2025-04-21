@@ -2,23 +2,45 @@ return {
   "neovim/nvim-lspconfig",
   opts = {
     servers = {
-      pyright = {
+      -- pyright = {
+      --   settings = {
+      --     python = {
+      --       -- Using Ruff's import organizer
+      --       disableOrganizeImports = true,
+      --       analysis = {
+      --         autoImportCompletions = true,
+      --         autoSearchPaths = true,
+      --         useLibraryCodeForTypes = true,
+      --         -- diagnosticMode = "workspace",
+      --         ignore = { "*", ".venv" },
+      --       },
+      --       exclude = { ".venv" },
+      --       venvPath = "./",
+      --       venv = ".venv",
+      --       -- import 관련 추가 설정
+      --       importFormat = "absolute",
+      --     },
+      --   },
+      -- },
+      basedpyright = {
         settings = {
-          python = {
+          basedpyright = {
             -- Using Ruff's import organizer
             disableOrganizeImports = true,
             analysis = {
+              autoImportCompletions = true,
               autoSearchPaths = true,
               useLibraryCodeForTypes = true,
               -- diagnosticMode = "workspace",
-              ignore = { "*", ".venv" },
+              callArgumentNames = false,
+              inlayHints = {
+                callArgumentNames = false,
+              },
             },
-            exclude = { ".venv" },
             venvPath = "./",
             venv = ".venv",
             -- import 관련 추가 설정
             importFormat = "absolute",
-            autoImportCompletions = true,
           },
         },
       },

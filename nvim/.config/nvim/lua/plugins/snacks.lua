@@ -13,7 +13,7 @@ return {
     {
       "<leader><leader>",
       function()
-        snacks.picker.files({
+        snacks.picker.smart({
           hidden = true,
           -- ignored = true,
         })
