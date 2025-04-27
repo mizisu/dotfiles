@@ -1,6 +1,5 @@
 # Todo list
 
-- auto import
 - 테스트 실행 이후 Attach? or ouput 화면 출력?
 - tmux 줄 바꿈 하지 않기
 - Server debug and Test code debug

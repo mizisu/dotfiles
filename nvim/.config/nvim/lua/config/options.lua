@@ -12,4 +12,3 @@ vim.opt.foldexpr = "nvim_treesitter#foldexpr()"
 -- vim.g.lazyvim_python_lsp = "pyright"
 vim.g.lazyvim_python_lsp = "basedpyright"
 vim.g.lazyvim_python_ruff = "ruff"
-

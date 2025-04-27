@@ -32,7 +32,7 @@ return {
               autoSearchPaths = true,
               useLibraryCodeForTypes = true,
               -- diagnosticMode = "workspace",
-              callArgumentNames = false,
+              diagnosticMode = "openFilesOnly",
               inlayHints = {
                 callArgumentNames = false,
               },
