@@ -1,3 +1,4 @@
+---@diagnostic disable: missing-fields
 return {
   {
     "nvim-neotest/neotest",
@@ -89,7 +90,7 @@ return {
             if type(args[1]) == "string" and not args[1]:find("%.py") then
               -- 출력을 단순하게 만들기 위해
               -- 특정 파일이 아니라 전체 실행의 경우에는 VIEW_TRACEBACK을 False로 실행
-              args.env.VIEW_TRACEBACK = false
+              args.env.VIEW_TRACEBACK = "false"
             end
 
             return args
