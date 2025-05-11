@@ -17,7 +17,7 @@
 -- { "<leader>dw", function() require("dap.ui.widgets").hover() end, desc = "Widgets" },
 
 return {
-    "mfussenegger/nvim-dap-python",
+  "mfussenegger/nvim-dap-python",
     -- stylua: ignore
     keys = {{
         "<leader>dPt",
@@ -34,23 +34,22 @@ return {
         desc = "Debug Class",
         ft = "python"
     }},
-    config = function()
-        require("dap-python").setup('uv')
-        table.insert(require('dap').configurations.python, 1, {
-            type = 'python',
-            request = 'launch',
-            name = 'django',
-            program = "${workspaceFolder}/manage.py",
-            args = {
-                "runserver",
-                "7777",
-                "--settings=server.settings.local",
-                "--noreload",
-                "--skip-checks",
-            },
-            console = 'integratedTerminal',
-            -- ... more options, see https://github.com/microsoft/debugpy/wiki/Debug-configuration-settings
-        })
-          
-    end
+  config = function()
+    require("dap-python").setup("uv")
+    table.insert(require("dap").configurations.python, 1, {
+      type = "python",
+      request = "launch",
+      name = "django",
+      program = "${workspaceFolder}/manage.py",
+      args = {
+        "runserver",
+        "7777",
+        "--settings=server.settings.local",
+        "--noreload",
+        "--skip-checks",
+      },
+      console = "integratedTerminal",
+      -- ... more options, see https://github.com/microsoft/debugpy/wiki/Debug-configuration-settings
+    })
+  end,
 }
