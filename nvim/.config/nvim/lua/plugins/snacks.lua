@@ -5,6 +5,13 @@ return {
   opts = {
     picker = {
       hidden = true,
+      win = {
+        input = {
+          keys = {
+            ["<a-r>"] = { "toggle_regex", mode = { "i", "n" } },
+          },
+        },
+      },
     },
   },
 
