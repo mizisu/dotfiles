@@ -16,6 +16,9 @@ return {
   },
 
   keys = {
+    { "<leader>.", false, desc = "Toggle Scratch Buffer" },
+    { "<leader>S", false, desc = "Select Scratch Buffer" },
+
     { "<leader>/", false },
     {
       "<leader><leader>",
@@ -36,6 +39,13 @@ return {
         })
       end,
       desc = "Grep",
+    },
+    {
+      "<leader>ba",
+      function()
+        snacks.bufdelete.all()
+      end,
+      desc = "Delete all buffers",
     },
   },
 }

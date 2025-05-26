@@ -8,7 +8,7 @@ return {
       "debugpy",
       "mypy",
       "ruff",
-      "pyright",
+      "basedpyright",
 
       -- Rust
       "rust-analyzer",
