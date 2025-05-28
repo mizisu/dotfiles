@@ -75,5 +75,3 @@ require("lazy").setup({
     },
   },
 })
-
--- require("config.custom.git-branch-watcher")

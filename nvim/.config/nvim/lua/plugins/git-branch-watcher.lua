@@ -1,15 +1,17 @@
 local uv = vim.loop
 local git_head = nil
-local base_ref = nil 
+local base_ref = nil
 
 local function is_git_repo()
   return vim.fn.isdirectory(".git") == 1
 end
 
 local function get_git_branch()
-  local head_file = vim.fn.finddir('.git', '.;') .. '/HEAD'
+  local head_file = vim.fn.finddir(".git", ".;") .. "/HEAD"
   local f = io.open(head_file, "r")
-  if not f then return nil end
+  if not f then
+    return nil
+  end
   local head = f:read("*l")
   f:close()
   if head:match("^ref: refs/heads/") then
@@ -71,6 +73,5 @@ if is_git_repo() then
   uv.new_timer():start(0, 1000, vim.schedule_wrap(change_gitsigns_base))
 end
 
-return {
+return {}
 
-}
