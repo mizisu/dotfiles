@@ -2,6 +2,10 @@ local uv = vim.loop
 local git_head = nil
 local base_ref = nil 
 
+local function is_git_repo()
+  return vim.fn.isdirectory(".git") == 1
+end
+
 local function get_git_branch()
   local head_file = vim.fn.finddir('.git', '.;') .. '/HEAD'
   local f = io.open(head_file, "r")
@@ -33,6 +37,9 @@ local function print_branch_change_message(branch)
 end
 
 local function change_gitsigns_base()
+  if not is_git_repo() then
+    return
+  end
   require("gitsigns")
   if base_ref then
     vim.cmd("Gitsigns change_base " .. base_ref)
@@ -40,6 +47,9 @@ local function change_gitsigns_base()
 end
 
 local function check_branch_change()
+  if not is_git_repo() then
+    return
+  end
   local branch = get_git_branch()
   if not git_head then
     git_head = branch
@@ -56,8 +66,10 @@ local function check_branch_change()
   print_branch_change_message(branch)
 end
 
-uv.new_timer():start(1000, 3000, vim.schedule_wrap(check_branch_change))
-uv.new_timer():start(0, 1000, vim.schedule_wrap(change_gitsigns_base))
+if is_git_repo() then
+  uv.new_timer():start(1000, 3000, vim.schedule_wrap(check_branch_change))
+  uv.new_timer():start(0, 1000, vim.schedule_wrap(change_gitsigns_base))
+end
 
 return {
 
