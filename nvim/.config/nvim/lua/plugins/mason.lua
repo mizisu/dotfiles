@@ -5,6 +5,7 @@ return {
       -- Lua
       "lua-language-server",
       -- Python
+      "pyrefly",
       "debugpy",
       "mypy",
       "ruff",

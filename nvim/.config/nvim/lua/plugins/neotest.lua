@@ -86,6 +86,7 @@ return {
           augment = function(tree, args)
             args.env = args.env or {}
             args.env.DJANGO_SETTINGS_MODULE = "server.settings.test"
+            args.env.DEBUG = "True"
 
             if type(args[1]) == "string" and not args[1]:find("%.py") then
               -- 출력을 단순하게 만들기 위해

@@ -22,6 +22,31 @@ return {
       --     },
       --   },
       -- },
+      --
+      -- for pyrefly?
+      -- basedpyright = {
+      --   settings = {
+      --     basedpyright = {
+      --       -- Using Ruff's import organizer
+      --       disableOrganizeImports = true,
+      --       analysis = {
+      --         typeCheckingMode = "off",
+      --         autoImportCompletions = true,
+      --         autoSearchPaths = false,
+      --         useLibraryCodeForTypes = false,
+      --         -- diagnosticMode = "workspace",
+      --         diagnosticMode = "openFilesOnly",
+      --         inlayHints = {
+      --           callArgumentNames = false,
+      --         },
+      --       },
+      --       venvPath = "./",
+      --       venv = ".venv",
+      --       -- import 관련 추가 설정
+      --       importFormat = "absolute",
+      --     },
+      --   },
+      -- },
       basedpyright = {
         settings = {
           basedpyright = {
@@ -44,6 +69,7 @@ return {
           },
         },
       },
+      -- configs end
     },
   },
 }
