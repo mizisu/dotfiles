@@ -84,13 +84,6 @@ plugins=(
 	zsh-completions
 )
 
-# Set Oh My Zsh theme conditionally
-if [[ "$TERM_PROGRAM" == "vscode" ]]; then
-  ZSH_THEME=""  # Disable Powerlevel10k for Cursor
-else
-  ZSH_THEME="powerlevel10k/powerlevel10k"
-fi
-
 source $ZSH/oh-my-zsh.sh
 
 # User configuration
