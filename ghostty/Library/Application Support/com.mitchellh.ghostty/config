@@ -1,3 +1,5 @@
+custom-shader = shaders/cursor_blaze.glsl
+
 theme = catppuccin-macchiato
 
 shell-integration = zsh
@@ -5,12 +7,13 @@ shell-integration = zsh
 background-opacity = 1
 background-blur = true
 
-font-family = "Hack Nerd Font"
+# font-family = "Hack Nerd Font"
+font-family = "MesloLGS NF"
 font-family = "D2Coding"
 
 cursor-opacity = 0.2
 
-font-size = 14
+font-size = 13
 
 macos-option-as-alt = true
 
@@ -21,3 +24,4 @@ clipboard-trim-trailing-spaces = true
 window-padding-balance = true
 window-padding-x = 0
 window-padding-y = 0
+

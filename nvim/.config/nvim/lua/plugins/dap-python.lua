@@ -33,7 +33,10 @@ return {
         end,
         desc = "Debug Class",
         ft = "python"
-    }},
+    },
+    { "<leader>dn", function() require("dap").step_over() end, desc = "Step Over" },
+  },
+
   config = function()
     require("dap-python").setup("uv")
     table.insert(require("dap").configurations.python, 1, {
