@@ -118,6 +118,9 @@ source $ZSH/oh-my-zsh.sh
 # z.sh
 source ~/z.sh
 
+# Add path 
+export PATH="/Users/charles/.local/bin:$PATH"
+
 # Run Sublime Text in terminal
 export PATH="/Applications/Sublime Text.app/Contents/SharedSupport/bin:$PATH"
 
@@ -141,6 +144,8 @@ export CPPFLAGS="-I/opt/homebrew/opt/mysql-client/include"
 
 export PKG_CONFIG_PATH="/opt/homebrew/opt/mysql-client/lib/pkgconfig"
 
+export EDITOR=/opt/homebrew/bin/nvim
+
 # Lemonbase
 alias bastion="tsh ssh -A ubuntu@bastion-prod"
 alias bastion-dev="ssh bastion-dev"
@@ -152,14 +157,12 @@ export NVM_DIR="$HOME/.nvm"
 [ -s "/opt/homebrew/opt/nvm/nvm.sh" ] && \. "/opt/homebrew/opt/nvm/nvm.sh"  # This loads nvm
 [ -s "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm" ] && \. "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm"  # This loads nvm bash_completion
 
-
 # Added by OrbStack: command-line tools and integration
 # This won't be added again if you remove it.
 source ~/.orbstack/shell/init.zsh 2>/dev/null || :
 
 # Go version manager
 [[ -s "/Users/charles/.gvm/scripts/gvm" ]] && source "/Users/charles/.gvm/scripts/gvm"
-
 
 # Use a minimal prompt in Cursor to avoid command detection issues
 if [[ "$TERM_PROGRAM" == "vscode" ]]; then
