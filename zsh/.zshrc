@@ -118,6 +118,9 @@ source $ZSH/oh-my-zsh.sh
 # z.sh
 source ~/z.sh
 
+# fzf
+source <(fzf --zsh)
+
 # Add path 
 export PATH="/Users/charles/.local/bin:$PATH"
 
@@ -126,9 +129,10 @@ export PATH="/Applications/Sublime Text.app/Contents/SharedSupport/bin:$PATH"
 
 # Git
 alias branch="git symbolic-ref --short HEAD"
+alias gs="git branch -a | sed 's/remotes\/origin\///' | sort -u | fzf | xargs git switch"
 
 # VIM
-alias vim=nvim
+alias vim="nvim --listen ~/.cache/nvim/server.pipe"
 
 # bat
 alias cat=bat
@@ -164,13 +168,7 @@ source ~/.orbstack/shell/init.zsh 2>/dev/null || :
 # Go version manager
 [[ -s "/Users/charles/.gvm/scripts/gvm" ]] && source "/Users/charles/.gvm/scripts/gvm"
 
-# Use a minimal prompt in Cursor to avoid command detection issues
-if [[ "$TERM_PROGRAM" == "vscode" ]]; then
-  PROMPT='%n@%m:%~%# '
-  RPROMPT=''
-else
-  # Powerlevel10k theme
-  source /opt/homebrew/share/powerlevel10k/powerlevel10k.zsh-theme
-  # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
-  [[ -f ~/.p10k.zsh ]] && source ~/.p10k.zsh
-fi
+# Powerlevel10k theme
+source /opt/homebrew/share/powerlevel10k/powerlevel10k.zsh-theme
+# To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
+[[ -f ~/.p10k.zsh ]] && source ~/.p10k.zsh

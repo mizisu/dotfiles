@@ -56,6 +56,7 @@ local function set_base_ref()
     return
   end
   base_ref = get_base_ref()
+  print("Set base ref: " .. (base_ref or "none"))
 end
 
 vim.keymap.set("n", "<leader>ghg", function()

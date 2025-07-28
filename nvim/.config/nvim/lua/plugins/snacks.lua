@@ -12,6 +12,31 @@ return {
           },
         },
       },
+      sources = {
+        explorer = {
+          win = {
+            list = {
+              keys = {
+                ["<c-y>"] = "explorer_yank_filename",
+              },
+            },
+          },
+        },
+      },
+      actions = {
+        explorer_yank_filename = function(picker)
+          local items = picker:selected({ fallback = true })
+          if #items > 0 then
+            local filenames = {}
+            for _, item in ipairs(items) do
+              table.insert(filenames, vim.fn.fnamemodify(item.file, ":t"))
+            end
+            local value = table.concat(filenames, "\n")
+            vim.fn.setreg("+", value)
+            snacks.notify.info("Copied " .. #filenames .. " filename(s)")
+          end
+        end,
+      },
     },
   },
 
