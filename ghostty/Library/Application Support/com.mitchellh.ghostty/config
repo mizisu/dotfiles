@@ -7,8 +7,9 @@ shell-integration = zsh
 background-opacity = 1
 background-blur = true
 
-# font-family = "Hack Nerd Font"
-font-family = "MesloLGS NF"
+# font-family = "Google Sans Code"
+# font-family = "MesloLGS NF"
+font-family = "Hack Nerd Font"
 font-family = "D2Coding"
 
 cursor-opacity = 0.2
