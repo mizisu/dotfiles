@@ -13,6 +13,9 @@ return {
 
       -- Rust
       "rust-analyzer",
+
+      -- Javascript/TypeScript
+      "biome",
     },
   },
 }

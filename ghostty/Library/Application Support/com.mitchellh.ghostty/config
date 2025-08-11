@@ -1,6 +1,7 @@
-custom-shader = shaders/cursor_blaze.glsl
-
 theme = catppuccin-macchiato
+# custom-shader = shaders/crt.glsl
+# custom-shader = shaders/cursor.glsl
+# custom-shader = shaders/snow.glsl
 
 shell-integration = zsh
 
