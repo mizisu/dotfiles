@@ -46,11 +46,12 @@ return {
 
     { "<leader>/", false },
     {
-      "<leader><leader>",
+      -- "<leader><leader>",
+      "<leader>ff",
       function()
         snacks.picker.smart({
           hidden = true,
-          -- ignored = true,
+          ignored = true,
         })
       end,
       desc = "Find Files",
@@ -64,6 +65,17 @@ return {
         })
       end,
       desc = "Grep",
+    },
+    {
+      "<leader>sc",
+      function()
+        snacks.picker.grep({
+          hidden = true,
+          regex = false,
+          search = "class ",
+        })
+      end,
+      desc = "Search class",
     },
     {
       "<leader>ba",

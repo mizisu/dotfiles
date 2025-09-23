@@ -1,3 +1,5 @@
+typeset -g POWERLEVEL9K_DISABLE_GITSTATUS=true
+
 # Enable Powerlevel10k instant prompt. Should stay close to the top of ~/.zshrc.
 # Initialization code that may require console input (password prompts, [y/n]
 # confirmations, etc.) must go above this block; everything else may go below.
@@ -116,7 +118,9 @@ source $ZSH/oh-my-zsh.sh
 # alias ohmyzsh="mate ~/.oh-my-zsh"
 
 # z.sh
-source ~/z.sh
+# source ~/z.sh
+eval "$(zoxide init zsh)"
+
 
 # fzf
 source <(fzf --zsh)
@@ -124,11 +128,10 @@ source <(fzf --zsh)
 # Add path 
 export PATH="/Users/charles/.local/bin:$PATH"
 
-# Run Sublime Text in terminal
-export PATH="/Applications/Sublime Text.app/Contents/SharedSupport/bin:$PATH"
 
 # Git
 alias branch="git symbolic-ref --short HEAD"
+alias base-ref="gh pr view --json baseRefName -q .baseRefName"
 alias gs="git branch -a | sed 's/remotes\/origin\///' | sort -u | fzf | xargs git switch"
 alias mypr="gh pr list -a @me | fzf | sed -n 's/^\([0-9]*\).*/\1/p' | xargs gh pr checkout"
 alias review="gh pr list -S 'user-review-requested:@me' | fzf | sed -n 's/^\([0-9]*\).*/\1/p' | xargs gh pr checkout"
@@ -169,6 +172,9 @@ source ~/.orbstack/shell/init.zsh 2>/dev/null || :
 
 # Go version manager
 [[ -s "/Users/charles/.gvm/scripts/gvm" ]] && source "/Users/charles/.gvm/scripts/gvm"
+
+# Run Sublime Text in terminal
+export PATH="/Applications/Sublime Text.app/Contents/SharedSupport/bin:$PATH"
 
 # Powerlevel10k theme
 source /opt/homebrew/share/powerlevel10k/powerlevel10k.zsh-theme

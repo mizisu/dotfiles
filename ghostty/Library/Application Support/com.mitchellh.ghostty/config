@@ -1,7 +1,9 @@
-theme = catppuccin-macchiato
+theme = Catppuccin Macchiato
 # custom-shader = shaders/crt.glsl
 # custom-shader = shaders/cursor.glsl
 # custom-shader = shaders/snow.glsl
+# custom-shader = cursor_shaders/cursor_frozen.glsl
+custom-shader = cursor_shaders/cursor_smear_fade.glsl
 
 shell-integration = zsh
 
@@ -13,7 +15,8 @@ background-blur = true
 font-family = "Hack Nerd Font"
 font-family = "D2Coding"
 
-cursor-opacity = 0.2
+cursor-opacity = 1
+cursor-color = #d3cdc3
 
 font-size = 13
 
@@ -27,3 +30,6 @@ window-padding-balance = true
 window-padding-x = 0
 window-padding-y = 0
 
+keybind = global:cmd+grave_accent=toggle_quick_terminal
+quick-terminal-position = right
+quick-terminal-size = 50%

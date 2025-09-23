@@ -1,11 +1,11 @@
 return {
-  "williamboman/mason.nvim",
+  "mason-org/mason.nvim",
   opts = {
     ensure_installed = {
       -- Lua
       "lua-language-server",
       -- Python
-      "pyrefly",
+      -- "pyrefly",
       "debugpy",
       "mypy",
       "ruff",
