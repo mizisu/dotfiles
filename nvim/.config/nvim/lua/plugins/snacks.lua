@@ -48,12 +48,13 @@ return {
     {
       -- "<leader><leader>",
       "<leader>ff",
-      function()
-        snacks.picker.smart({
-          hidden = true,
-          ignored = true,
-        })
-      end,
+      false,
+      -- function()
+      --   snacks.picker.smart({
+      --     hidden = true,
+      --     ignored = true,
+      --   })
+      -- end,
       desc = "Find Files",
     },
     {

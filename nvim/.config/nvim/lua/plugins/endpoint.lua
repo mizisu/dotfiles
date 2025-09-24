@@ -1,11 +1,15 @@
 return {
   "zerochae/endpoint.nvim",
-  dependencies = { "nvim-telescope/telescope.nvim" },
-  cmd = { "Endpoint" },
+  dependencies = {
+    -- Choose one or more pickers (all optional):
+    "nvim-telescope/telescope.nvim", -- For telescope picker
+    "folke/snacks.nvim", -- For snacks picker
+    -- vim.ui.select picker works without dependencies
+  },
+  cmd = { "Endpoint", "EndpointRefresh" },
   config = function()
     require("endpoint").setup({
-      cache_mode = "persistent", -- Save cache between sessions
-      ui = { use_nerd_font = true }, -- Use nerd font icons
+      picker = { type = "snacks" },
     })
   end,
 }
