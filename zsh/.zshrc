@@ -121,13 +121,11 @@ source $ZSH/oh-my-zsh.sh
 # source ~/z.sh
 eval "$(zoxide init zsh)"
 
-
 # fzf
 source <(fzf --zsh)
 
 # Add path 
 export PATH="/Users/charles/.local/bin:$PATH"
-
 
 # Git
 alias branch="git symbolic-ref --short HEAD"
@@ -147,6 +145,9 @@ alias venv="source .venv/bin/activate"
 
 # mysql-client
 export PATH="/opt/homebrew/opt/mysql-client/bin:$PATH"
+
+# opencode
+export PATH=/Users/charles/.opencode/bin:$PATH
 
 export LDFLAGS="-L/opt/homebrew/opt/mysql-client/lib"
 export CPPFLAGS="-I/opt/homebrew/opt/mysql-client/include"
@@ -180,3 +181,4 @@ export PATH="/Applications/Sublime Text.app/Contents/SharedSupport/bin:$PATH"
 source /opt/homebrew/share/powerlevel10k/powerlevel10k.zsh-theme
 # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
 [[ -f ~/.p10k.zsh ]] && source ~/.p10k.zsh
+

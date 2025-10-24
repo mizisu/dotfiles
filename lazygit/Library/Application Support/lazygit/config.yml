@@ -28,3 +28,8 @@ gui:
   authorColors:
     '*': '#b7bdf8'
 
+customCommands:
+  - key: 'G'
+    context: 'global'
+    command: "git gone"
+

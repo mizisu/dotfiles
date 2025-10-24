@@ -23,6 +23,16 @@ return {
           },
         },
       },
+      previewers = {
+        diff = {
+          builtin = false,
+          cmd = { "delta" },
+        },
+        git = {
+          builtin = false,
+          args = { "-c", "core.pager=delta" },
+        },
+      },
       actions = {
         explorer_yank_filename = function(picker)
           local items = picker:selected({ fallback = true })
@@ -46,16 +56,18 @@ return {
 
     { "<leader>/", false },
     {
-      -- "<leader><leader>",
       "<leader>ff",
-      false,
-      -- function()
-      --   snacks.picker.smart({
-      --     hidden = true,
-      --     ignored = true,
-      --   })
-      -- end,
+      function()
+        snacks.picker.smart({
+          hidden = true,
+          ignored = true,
+        })
+      end,
       desc = "Find Files",
+    },
+    {
+      "<leader><leader>",
+      false,
     },
     {
       "<leader>sg",

@@ -24,8 +24,8 @@ function M.setup()
 			local screen3 = allScreens[3]:getUUID()
 
 			hs.spaces.addSpaceToScreen(screen1)
-			hs.spaces.addSpaceToScreen(screen2)
-			hs.spaces.addSpaceToScreen(screen2)
+			hs.spaces.addSpaceToScreen(screen3)
+			hs.spaces.addSpaceToScreen(screen3)
 		end
 	end)
 end
