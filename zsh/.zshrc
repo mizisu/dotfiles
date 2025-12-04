@@ -129,10 +129,15 @@ export PATH="/Users/charles/.local/bin:$PATH"
 
 # Git
 alias branch="git symbolic-ref --short HEAD"
+alias gpo='git push -u origin $(branch)'
 alias base-ref="gh pr view --json baseRefName -q .baseRefName"
 alias gs="git branch -a | sed 's/remotes\/origin\///' | sort -u | fzf | xargs git switch"
 alias mypr="gh pr list -a @me | fzf | sed -n 's/^\([0-9]*\).*/\1/p' | xargs gh pr checkout"
 alias review="gh pr list -S 'user-review-requested:@me' | fzf | sed -n 's/^\([0-9]*\).*/\1/p' | xargs gh pr checkout"
+alias dump-temp="./scripts/dumpdb.sh lemonbase_temp --recreate && mysql -h127.0.0.1 -uroot -prootpw -e 'DROP DATABASE IF EXISTS test_lemonbase_temp'"
+
+# CodeRabbit
+alias cr-review='git fetch origin $(base-ref):$(base-ref) &&  cr review --base=$(base-ref)'
 
 # VIM
 alias vim="nvim --listen ~/.cache/nvim/server.pipe"

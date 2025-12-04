@@ -1,0 +1,230 @@
+#!/bin/bash
+
+# ============================================
+# Sketchybar + AeroSpace + Catppuccin Macchiato
+# Inspired by chenxin-yan/dotfiles
+# ============================================
+
+DIR="$HOME/.config/sketchybar"
+PLUGIN_DIR="$DIR/plugins"
+
+FONT="Hack Nerd Font"
+ICON_FONT="SF Pro"
+
+PADDING=6
+
+source "$DIR/colors.sh"
+source "$DIR/icons.sh"
+
+# ============================================
+# Bar Appearance (Floating Style)
+# ============================================
+BAR_PROPS=(
+  display=all
+  height=32
+  color=$BG_PRI_COLR
+  shadow=off
+  position=top
+  sticky=on
+  padding_right=15
+  padding_left=15
+  corner_radius=10
+  y_offset=6
+  margin=6
+  blur_radius=30
+  notch_width=0
+)
+
+# ============================================
+# Global Defaults
+# ============================================
+DEF_PROPS=(
+  updates=when_shown
+  icon.font="$ICON_FONT:Regular:16.0"
+  icon.color=$WHITE
+  icon.padding_left=10
+  icon.padding_right=2
+  label.font="$FONT:Bold:14.0"
+  label.color=$WHITE
+  label.padding_left=$PADDING
+  label.padding_right=10
+  background.color=$BG_PRI_COLR
+  background.padding_right=$PADDING
+  background.padding_left=$PADDING
+  background.height=22
+  background.corner_radius=8
+)
+
+sketchybar --bar "${BAR_PROPS[@]}"
+sketchybar --default "${DEF_PROPS[@]}"
+
+# ============================================
+# Left Items
+# ============================================
+
+# Apple Logo (using Nerd Font Mono for proper icon rendering)
+APPLE=(
+  icon=󰀵
+  icon.color=$WHITE
+  icon.font="Hack Nerd Font Mono:Bold:18.0"
+  icon.padding_left=8
+  icon.padding_right=8
+  icon.y_offset=1
+  label.drawing=off
+  background.padding_left=0
+  background.padding_right=16
+  click_script="sketchybar --update"
+)
+
+sketchybar --add item apple left \
+           --set apple "${APPLE[@]}"
+
+# AeroSpace Workspace Event
+sketchybar --add event aerospace_workspace_change
+
+# AeroSpace Workspaces (ID:Label pairs)
+SPACE_IDS=("Q" "W" "E" "F" "X")
+SPACE_LABELS=("Slack" "Main" "Browser" "Finder" "Extra")
+
+SPACE=(
+  icon.padding_left=12
+  icon.padding_right=12
+  icon.color=$WHITE
+  icon.font="$FONT:Bold:12.0"
+  icon.highlight_color=$MAUVE
+  background.padding_left=-4
+  background.padding_right=-4
+  background.color=$BG_SEC_COLR
+  background.corner_radius=8
+  background.drawing=on
+  label.drawing=off
+)
+
+for i in "${!SPACE_IDS[@]}"; do
+  sid="${SPACE_IDS[$i]}"
+  label="${SPACE_LABELS[$i]}"
+  sketchybar --add item space.$sid left \
+             --subscribe space.$sid aerospace_workspace_change \
+             --set space.$sid "${SPACE[@]}" \
+                  icon="($sid) $label" \
+                  click_script="aerospace workspace $sid" \
+                  script="$PLUGIN_DIR/aerospace.sh $sid"
+done
+
+# Front App (with app icon)
+FRONT_APP=(
+  label.font="$FONT:ExtraBold:14.0"
+  icon.font="sketchybar-app-font:Regular:16.0"
+  icon.color=$BG_PRI_COLR
+  label.color=$BG_PRI_COLR
+  background.color=$LAVENDER
+  script="$PLUGIN_DIR/front_app.sh"
+)
+
+sketchybar --add item front_app left \
+           --set front_app "${FRONT_APP[@]}" \
+           --subscribe front_app front_app_switched
+
+# ============================================
+# Right Items
+# ============================================
+
+# Time
+TIME=(
+  update_freq=10
+  icon.drawing=off
+  label.padding_left=10
+  label.padding_right=6
+  background.padding_right=2
+  script="$PLUGIN_DIR/time.sh"
+)
+
+sketchybar --add item time right \
+           --set time "${TIME[@]}"
+
+# Battery
+BATTERY=(
+  update_freq=120
+  icon.font="Hack Nerd Font Mono:Bold:18.0"
+  icon.color=$TEAL
+  background.color=$BG_SEC_COLR
+  script="$PLUGIN_DIR/battery.sh"
+)
+
+sketchybar --add item battery right \
+           --set battery "${BATTERY[@]}" \
+           --subscribe battery system_woke power_source_change
+
+# Volume
+VOLUME=(
+  icon.font="Hack Nerd Font Mono:Bold:16.0"
+  icon.color=$PEACH
+  background.color=$BG_SEC_COLR
+  script="$PLUGIN_DIR/volume.sh"
+)
+
+sketchybar --add item volume right \
+           --set volume "${VOLUME[@]}" \
+           --subscribe volume volume_change
+
+# WiFi (icon only)
+WIFI=(
+  update_freq=30
+  icon.font="Hack Nerd Font Mono:Bold:16.0"
+  icon.color=$BLUE
+  label.drawing=off
+  background.color=$BG_SEC_COLR
+  click_script="$PLUGIN_DIR/wifi_click.sh"
+  script="$PLUGIN_DIR/wifi.sh"
+)
+
+sketchybar --add item wifi right \
+           --set wifi "${WIFI[@]}" \
+           --subscribe wifi wifi_change
+
+# Bluetooth (icon only)
+BLUETOOTH=(
+  update_freq=30
+  icon.font="Hack Nerd Font Mono:Bold:16.0"
+  icon.color=$LAVENDER
+  label.drawing=off
+  background.color=$BG_SEC_COLR
+  click_script="$PLUGIN_DIR/bluetooth_click.sh"
+  script="$PLUGIN_DIR/bluetooth.sh"
+)
+
+sketchybar --add item bluetooth right \
+           --set bluetooth "${BLUETOOTH[@]}"
+
+# Input Source (한/EN)
+INPUT_SOURCE=(
+  update_freq=1
+  icon.drawing=off
+  label.font="$FONT:Bold:14.0"
+  label.color=$YELLOW
+  background.color=$BG_SEC_COLR
+  script="$PLUGIN_DIR/input_source.sh"
+)
+
+sketchybar --add item input_source right \
+           --set input_source "${INPUT_SOURCE[@]}"
+
+# Calendar (next event)
+CALENDAR=(
+  update_freq=60
+  icon.font="Hack Nerd Font Mono:Bold:16.0"
+  icon.color=$GREEN
+  background.color=$BG_SEC_COLR
+  click_script="$PLUGIN_DIR/calendar_click.sh"
+  script="$PLUGIN_DIR/calendar.sh"
+)
+
+sketchybar --add item calendar right \
+           --set calendar "${CALENDAR[@]}"
+
+# ============================================
+# Finalize
+# ============================================
+sketchybar --update
+
+echo "sketchybar configuration loaded (Catppuccin Macchiato - Floating Style)"

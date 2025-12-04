@@ -120,7 +120,7 @@ function M.setup_exosphere_automation()
 				fn = function()
 					hs.eventtap.keyStroke({}, "return")
 				end,
-				delay = 0,
+				delay = 1000,
 			},
 			{
 				fn = function()

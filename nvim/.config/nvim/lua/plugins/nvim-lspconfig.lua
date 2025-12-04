@@ -2,6 +2,15 @@ return {
   "neovim/nvim-lspconfig",
   opts = {
     servers = {
+      ["*"] = {
+        capabilities = {
+          general = {
+            positionEncodings = { "utf-16" },
+          },
+        },
+      },
+      -- Explicitly disable null-ls as it's handled by none-ls
+      ["null-ls"] = false,
       -- pyright = {
       --   settings = {
       --     python = {

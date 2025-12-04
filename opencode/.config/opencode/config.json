@@ -1,0 +1,49 @@
+{
+	"$schema": "https://opencode.ai/config.json",
+	"theme": "catppuccin-macchiato",
+	"model": "github-copilot/claude-sonnet-4.5",
+	"share": "disabled",
+	"autoshare": false,
+	"autoupdate": true,
+	"instructions": ["AGENTS.md", ".cursor/rules/*.md"],
+	"agent": {
+		"code-analyzer": {
+			"disable": true
+		},
+		"general": {
+			"disable": true
+		},
+		"plan": {
+			"permission": {
+				"bash": {
+					"find *": "allow",
+					"ls *": "allow",
+					"grep *": "allow"
+				}
+			}
+		}
+	},
+	"mcp": {
+		"github": {
+			"type": "local",
+			"command": [
+				"docker",
+				"run",
+				"-i",
+				"--rm",
+				"-e",
+				"GITHUB_PERSONAL_ACCESS_TOKEN",
+				"ghcr.io/github/github-mcp-server"
+			],
+			"enabled": true,
+			"environment": {
+				"GITHUB_PERSONAL_ACCESS_TOKEN": "{env:github_token}"
+			}
+		},
+		"chrome-devtools": {
+			"type": "local",
+			"command": ["npx", "chrome-devtools-mcp@latest"],
+			"enabled": true
+		}
+	}
+}

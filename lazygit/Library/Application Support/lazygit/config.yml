@@ -1,8 +1,7 @@
 git:
-  paging:
-    colorArg: always
-    pager: delta -s --dark --paging=never --24-bit-color=never
-
+  pagers:
+    - colorArg: always
+      pager: delta -s --dark --paging=never --24-bit-color=never
 gui:
   theme:
     activeBorderColor:
@@ -24,12 +23,13 @@ gui:
       - '#cad3f5'
     searchingActiveBorderColor:
       - '#eed49f'
-
   authorColors:
     '*': '#b7bdf8'
-
+os:
+  edit: "nvim --server $NVIM --remote {{filename}}"
+  editAtLine: "nvim --server $NVIM --remote {{filename}}; nvim --server $NVIM --remote-send ':{{line}}<CR>'"
+  editInTerminal: false
 customCommands:
   - key: 'G'
     context: 'global'
     command: "git gone"
-
