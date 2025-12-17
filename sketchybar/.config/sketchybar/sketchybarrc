@@ -33,6 +33,7 @@ BAR_PROPS=(
   margin=6
   blur_radius=30
   notch_width=0
+  topmost=off
 )
 
 # ============================================
@@ -84,7 +85,7 @@ sketchybar --add event aerospace_workspace_change
 
 # AeroSpace Workspaces (ID:Label pairs)
 SPACE_IDS=("Q" "W" "E" "F" "X")
-SPACE_LABELS=("Slack" "Main" "Browser" "Finder" "Extra")
+SPACE_LABELS=("Slack" "Main" "Browser" "Extra" "Finder")
 
 SPACE=(
   icon.padding_left=12

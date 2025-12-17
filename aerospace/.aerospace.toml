@@ -57,7 +57,7 @@ automatically-unhide-macos-hidden-apps = false
 # persistent-workspaces = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C",
 #                          "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O",
 #                          "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"]
-persistent-workspaces = ["Q", "F", "W", "X", "E"]
+persistent-workspaces = ["Q", "X", "W", "F", "E"]
 
 # Assign workspaces to monitors
 # Monitor 1 (Built-in): S, E
@@ -68,9 +68,9 @@ persistent-workspaces = ["Q", "F", "W", "X", "E"]
 # 2 monitors: 1(Q,F) / 2(W,X,E)
 # 1 monitor:  1(Q,F,W,X,E)
 Q = [1, 'main']           # slack (Q)
-F = [1, 'main']           # Finder
+X = [1, 'main']           # Finder
 W = [2, 1, 'main']        # Work (Terminal, DB, Excel, etc.)
-X = [2, 1, 'main']        # eXtra work (임시)
+F = [2, 1, 'main']        # eXtra work (임시)
 E = [3, 2, 1, 'main']     # browsEr
 
 
@@ -171,9 +171,9 @@ on-mode-changed = []
     # alt-9 = 'workspace 9'
     # Workspace bindings
     alt-q = 'workspace Q' # slack
-    alt-f = 'workspace F' # Finder
+    alt-x = 'workspace X' # Finder
     alt-w = 'workspace W' # Work (Terminal, DB, Excel, etc.)
-    alt-x = 'workspace X' # eXtra work (임시)
+    alt-f = 'workspace F' # eXtra work (임시)
     alt-e = 'workspace E' # browsEr
     #
     # See: https://nikitabobko.github.io/AeroSpace/commands#move-node-to-workspace
@@ -188,9 +188,9 @@ on-mode-changed = []
     # alt-shift-9 = 'move-node-to-workspace 9'
     # Move window to workspace
     alt-shift-q = 'move-node-to-workspace Q'
-    alt-shift-f = 'move-node-to-workspace F'
-    alt-shift-w = 'move-node-to-workspace W'
     alt-shift-x = 'move-node-to-workspace X'
+    alt-shift-w = 'move-node-to-workspace W'
+    alt-shift-f = 'move-node-to-workspace F'
     alt-shift-e = 'move-node-to-workspace E'
     #
     # See: https://nikitabobko.github.io/AeroSpace/commands#workspace-back-and-forth

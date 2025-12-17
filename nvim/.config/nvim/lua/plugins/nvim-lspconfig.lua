@@ -38,9 +38,10 @@ return {
       --     basedpyright = {
       --       -- Using Ruff's import organizer
       --       disableOrganizeImports = true,
+      --       disableLanguageServices = true,
       --       analysis = {
       --         typeCheckingMode = "off",
-      --         autoImportCompletions = true,
+      --         autoImportCompletions = false,
       --         autoSearchPaths = false,
       --         useLibraryCodeForTypes = false,
       --         -- diagnosticMode = "workspace",
@@ -56,6 +57,7 @@ return {
       --     },
       --   },
       -- },
+      -- ty = {},
       basedpyright = {
         settings = {
           basedpyright = {

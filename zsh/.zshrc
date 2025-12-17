@@ -130,6 +130,7 @@ export PATH="/Users/charles/.local/bin:$PATH"
 # Git
 alias branch="git symbolic-ref --short HEAD"
 alias gpo='git push -u origin $(branch)'
+alias gpoc='git push -u origin $(branch) && gh pr create --web -a @me'
 alias base-ref="gh pr view --json baseRefName -q .baseRefName"
 alias gs="git branch -a | sed 's/remotes\/origin\///' | sort -u | fzf | xargs git switch"
 alias mypr="gh pr list -a @me | fzf | sed -n 's/^\([0-9]*\).*/\1/p' | xargs gh pr checkout"

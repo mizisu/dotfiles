@@ -11,6 +11,7 @@ vim.opt.foldmethod = "expr"
 
 -- vim.g.lazyvim_python_lsp = "pyright"
 vim.g.lazyvim_python_lsp = "basedpyright"
+-- vim.g.lazyvim_python_lsp = "ty"
 -- vim.lsp.enable({ "pyrefly" })
 -- vim.g.lazyvim_python_lsp = "pyrefly"
 
