@@ -8,7 +8,7 @@
 	"instructions": ["AGENTS.md", ".cursor/rules/*.md"],
 	"agent": {
 		"code-analyzer": {
-			"disable": true
+			"disable": true, 
 		},
 		"general": {
 			"disable": true
@@ -37,7 +37,7 @@
 			],
 			"enabled": false,
 			"environment": {
-				"GITHUB_PERSONAL_ACCESS_TOKEN": "{env:github_token}"
+				"GITHUB_PERSONAL_ACCESS_TOKEN": "{env:GITHUB_TOKEN}"
 			}
 		},
 		"chrome-devtools": {
