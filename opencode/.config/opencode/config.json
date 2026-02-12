@@ -1,18 +1,38 @@
 {
 	"$schema": "https://opencode.ai/config.json",
 	"theme": "catppuccin-macchiato",
-	"model": "github-copilot/claude-opus-4.5",
+	"model": "anthropic/claude-opus-4-6",
+	"small_model": "anthropic/claude-haiku-4-5",
 	"share": "disabled",
 	"autoshare": false,
 	"autoupdate": true,
-	"instructions": ["AGENTS.md", ".cursor/rules/*.md"],
+	"instructions": ["AGENTS.md"],
+	"permission": {
+		"read": {
+			"*": "allow",
+			"*.env": "deny",
+			"*.env.*": "deny",
+			"*.env.example": "deny",
+			"*.aws*": "deny",
+			"*.ssh*": "deny"
+		},
+		"bash": {
+			"*.env": "deny",
+			"*.env.example": "deny",
+			"*.aws*": "deny",
+			"*.ssh*": "deny"
+		}
+	},
 	"agent": {
 		"code-analyzer": {
-			"disable": true, 
+			"disable": true
 		},
 		"general": {
 			"disable": true
 		},
+		"explore": {
+      "model": "anthropic/claude-sonnet-4-5"
+    },
 		"plan": {
 			"permission": {
 				"bash": {
@@ -21,7 +41,13 @@
 					"grep *": "allow"
 				}
 			}
-		}
+		},
+		"build": {
+			"model": "anthropic/claude-sonnet-4-5"
+		},
+    "compaction": {
+      "model": "anthropic/claude-sonnet-4-5"
+    },
 	},
 	"mcp": {
 		"github": {
@@ -43,6 +69,45 @@
 		"chrome-devtools": {
 			"type": "local",
 			"command": ["npx", "chrome-devtools-mcp@latest"],
+			"enabled": false
+		},
+		"querypie": {
+			"type": "local",
+			"command": [
+				"uv",
+				"run",
+				"--directory",
+				"/Users/charles/Desktop/src/querypie-mcp",
+				"querypie-mcp"
+			],
+			"enabled": false,
+			"environment": {
+				"DB_PROD_HOST": "10.0.45.235",
+				"DB_PROD_USER": "pr69a229cb-c6df-42ab-a2e3-ceb2e144e328",
+				"DB_PROD_PASSWORD": "{env:QUERYPIE_PASSWORD}",
+				"DB_PROD_NAME": "lemonbase",
+				"DB_LOCAL_HOST": "127.0.0.1",
+				"DB_LOCAL_PORT": "3306",
+				"DB_LOCAL_USER": "root",
+				"DB_LOCAL_PASSWORD": "rootpw",
+				"DB_LOCAL_NAME": "lemonbase_temp"
+			}
+		},
+		"serena": {
+			"type": "local",
+			"command": [
+				"uvx",
+				"--from",
+				"git+https://github.com/oraios/serena",
+				"serena",
+				"start-mcp-server",
+				"--open-web-dashboard=false"
+			],
+			"enabled": true
+		},
+		"": {
+			"type": "local",
+			"command": ["npx", "-y", "@playwriter/install-mcp playwriter@latest"],
 			"enabled": false
 		}
 	}

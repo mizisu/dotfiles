@@ -1,5 +1,5 @@
 #!/bin/bash
 
-# Time script (chenxin-yan style: date + time combined)
-LABEL=$(date '+%d %b %a %H:%M')
+# Time script (date + time: YYYY-MM-DD HH:MM format)
+LABEL=$(date '+%Y-%m-%d %H:%M')
 sketchybar --set $NAME label="$LABEL"

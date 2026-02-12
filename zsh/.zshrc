@@ -133,6 +133,7 @@ alias gpo='git push -u origin $(branch)'
 alias gpoc='git push -u origin $(branch) && gh pr create --web -a @me'
 alias base-ref="gh pr view --json baseRefName -q .baseRefName"
 alias gs="git branch -a | sed 's/remotes\/origin\///' | sort -u | fzf | xargs git switch"
+alias gb="git branch -a | sed 's/remotes\/origin\///' | sort -u | fzf"
 alias mypr="gh pr list -a @me | fzf | sed -n 's/^\([0-9]*\).*/\1/p' | xargs gh pr checkout"
 alias review="gh pr list -S 'user-review-requested:@me' | fzf | sed -n 's/^\([0-9]*\).*/\1/p' | xargs gh pr checkout"
 alias dump-temp="./scripts/dumpdb.sh lemonbase_temp --recreate && mysql -h127.0.0.1 -uroot -prootpw -e 'DROP DATABASE IF EXISTS test_lemonbase_temp'"
@@ -141,7 +142,7 @@ alias dump-temp="./scripts/dumpdb.sh lemonbase_temp --recreate && mysql -h127.0.
 alias cr-review='git fetch origin $(base-ref):$(base-ref) &&  cr review --base=$(base-ref)'
 
 # VIM
-alias vim="nvim --listen ~/.cache/nvim/server.pipe"
+alias vim='rm -f ~/.cache/nvim/server.pipe && nvim --listen ~/.cache/nvim/server.pipe'
 
 # bat
 alias cat=bat
@@ -151,14 +152,33 @@ alias venv="source .venv/bin/activate"
 
 # mysql-client
 export PATH="/opt/homebrew/opt/mysql-client/bin:$PATH"
+export LDFLAGS="-L/opt/homebrew/opt/mysql-client/lib"
+export CPPFLAGS="-I/opt/homebrew/opt/mysql-client/include"
+export PKG_CONFIG_PATH="/opt/homebrew/opt/mysql-client/lib/pkgconfig"
+
+# Mariadb
+export PATH="/opt/homebrew/opt/mariadb-connector-c/bin:$PATH"
+export LDFLAGS="-L/opt/homebrew/opt/mariadb-connector-c/lib"
+export CPPFLAGS="-I/opt/homebrew/opt/mariadb-connector-c/include"
+export PKG_CONFIG_PATH="/opt/homebrew/opt/mariadb-connector-c/lib/pkgconfig"
+
+# Lazygit
+alias lg="lazygit"
 
 # opencode
 export PATH=/Users/charles/.opencode/bin:$PATH
+alias oc="opencode"
+alias pwoc='\
+  GITHUB_TOKEN=$(op item get dnuu5rsp67thk4sfhslwigo2uq --reveal --fields password) \
+  QUERYPIE_PASSWORD=$(op item get mnjfg6b4stmu2pet52jttfk4sq --reveal --fields password) \
+  opencode'
 
-export LDFLAGS="-L/opt/homebrew/opt/mysql-client/lib"
-export CPPFLAGS="-I/opt/homebrew/opt/mysql-client/include"
 
-export PKG_CONFIG_PATH="/opt/homebrew/opt/mysql-client/lib/pkgconfig"
+# AWS
+alias awsdev='./scripts/aws/get_aws_access_token.py --serial-number arn:aws:iam::455628414130:mfa/charles@lemonbase.com  --token=$(op item get 3xbm2z37nniqk5k2mojzcyhj2m --otp)'
+
+# eza
+alias ls='eza'
 
 export EDITOR=/opt/homebrew/bin/nvim
 
@@ -188,3 +208,5 @@ source /opt/homebrew/share/powerlevel10k/powerlevel10k.zsh-theme
 # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
 [[ -f ~/.p10k.zsh ]] && source ~/.p10k.zsh
 
+
+if command -v wt >/dev/null 2>&1; then eval "$(command wt config shell init zsh)"; fi

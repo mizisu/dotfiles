@@ -33,3 +33,13 @@ vim.api.nvim_create_autocmd("BufReadPost", {
   end,
   desc = "Close lazygit window when editing file",
 })
+
+-- Disable vim spell check and all diagnostics for markdown files
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = "markdown",
+  callback = function(args)
+    vim.opt_local.spell = false
+    vim.diagnostic.enable(false, { bufnr = args.buf })
+  end,
+  desc = "Disable vim spell check and diagnostics in markdown files",
+})

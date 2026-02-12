@@ -21,7 +21,7 @@ local function wait_for_exosphere_with_while()
 end
 
 function M.setup_exosphere_automation()
-	hs.hotkey.bind({ "cmd", "shift" }, "e", function()
+	hs.hotkey.bind({ "cmd", "shift" }, "x", function()
 		local finder = hs.application.find("Finder")
 		if not finder or not finder:isFrontmost() then
 			hs.alert.show("Finder가 활성화되어 있지 않습니다")

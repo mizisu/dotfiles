@@ -74,7 +74,7 @@ keybindings:
   - key: C
     name: code review
     command: >
-      tmux new-window -c {{.RepoPath}} ' nvim -c ":silent Octo pr edit {{.PrNumber}}" '
+      rit {{.PrNumber}}
   branches: []
 
 repoPaths:
