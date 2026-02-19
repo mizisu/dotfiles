@@ -8,6 +8,7 @@ import {
 import { Container, SelectList, Text, type SelectItem } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { resolve, extname, relative } from "node:path";
+import { readFileSync } from "node:fs";
 import { LSPClient, type Diagnostic, type Location, type WorkspaceSymbol } from "./client.js";
 import { detectServers } from "./servers.js";
 
@@ -71,6 +72,18 @@ function rankSymbols(symbols: WorkspaceSymbol[], query: string): WorkspaceSymbol
       if (sa !== sb) return sa - sb;
       return a.name.length - b.name.length;
     });
+}
+
+function symbolAt(root: string, filePath: string, line: number, character: number): string | null {
+  try {
+    const src = readFileSync(resolve(root, filePath), "utf-8").split("\n")[line - 1];
+    if (!src) return null;
+    const re = /[\w$]/;
+    let s = character, e = character;
+    while (s > 0 && re.test(src[s - 1])) s--;
+    while (e < src.length && re.test(src[e])) e++;
+    return src.slice(s, e) || null;
+  } catch { return null; }
 }
 
 export default function (pi: ExtensionAPI) {
@@ -160,6 +173,15 @@ export default function (pi: ExtensionAPI) {
       line: Type.Number({ description: "Line number (1-based)" }),
       character: Type.Number({ description: "Column/character offset (0-based)" }),
     }),
+    renderCall(args, theme) {
+      const sym = symbolAt(projectRoot, args.path, args.line, args.character);
+      return new Text(
+        theme.fg("toolTitle", theme.bold("goto_definition ")) +
+        (sym ? theme.fg("accent", sym) + " " : "") +
+        theme.fg("dim", `${args.path}:${args.line}:${args.character}`),
+        0, 0,
+      );
+    },
     async execute(_id, params) {
       const filePath = params.path.replace(/^@/, "");
       const client = await getClient(filePath);
@@ -382,10 +404,12 @@ export default function (pi: ExtensionAPI) {
       if (result) {
         const [file, line] = result.split(":");
         const text = `${file}:${line}`;
-        await new Promise((r) => setTimeout(r, 50));
         // setEditorText replaces all content — append to existing text instead
         const existing = ctx.ui.getEditorText();
         ctx.ui.setEditorText(existing + text);
+        // Force re-render: setEditorText doesn't trigger requestRender(),
+        // and restoreEditor()'s render fires before we get here (nextTick > microtask).
+        ctx.ui.setStatus("_lsp-render", undefined);
       }
     },
   });
