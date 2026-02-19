@@ -58,7 +58,7 @@ automatically-unhide-macos-hidden-apps = false
 # persistent-workspaces = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C",
 #                          "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O",
 #                          "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"]
-persistent-workspaces = ["Q", "X", "W", "F", "E", "N"]
+persistent-workspaces = ["Q", "X", "W", "F", "E", "V"]
 
 # Assign workspaces to monitors
 # Monitor 1 (Built-in): S, E
@@ -73,7 +73,7 @@ X = [1, 'main']           # Finder
 W = [2, 1, 'main']        # Work (Terminal, DB, Excel, etc.)
 F = [2, 1, 'main']        # eXtra work (임시)
 E = [3, 2, 1, 'main']     # browsEr
-N = [2, 1, 'main']        # Notion
+V = [2, 1, 'main']        # Notion
 
 
 # A callback that runs every time binding mode changes
@@ -177,7 +177,7 @@ on-mode-changed = []
     alt-w = 'workspace W' # Work (Terminal, DB, Excel, etc.)
     alt-f = 'workspace F' # eXtra work (임시)
     alt-e = 'workspace E' # browsEr
-    alt-n = 'workspace N' # Notion
+    alt-v = 'workspace V' # Notion
     #
     # See: https://nikitabobko.github.io/AeroSpace/commands#move-node-to-workspace
     # alt-shift-1 = 'move-node-to-workspace 1'
@@ -195,7 +195,7 @@ on-mode-changed = []
     alt-shift-w = 'move-node-to-workspace W'
     alt-shift-f = 'move-node-to-workspace F'
     alt-shift-e = 'move-node-to-workspace E'
-    alt-shift-n = 'move-node-to-workspace N'
+    alt-shift-v = 'move-node-to-workspace V'
     #
     # See: https://nikitabobko.github.io/AeroSpace/commands#workspace-back-and-forth
     # alt-tab = 'workspace-back-and-forth'
@@ -240,4 +240,4 @@ run = 'move-node-to-workspace E'
 
 [[on-window-detected]]
 if.app-id = 'notion.id'
-run = 'move-node-to-workspace N'
+run = 'move-node-to-workspace V'
