@@ -1,0 +1,22 @@
+{
+  "lastChangelogVersion": "0.53.0",
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-5.3-codex",
+  "theme": "catppuccin-macchiato",
+  "editorPaddingX": 1,
+  "defaultThinkingLevel": "xhigh",
+  "enabledModels": [
+    "anthropic/claude-opus-4-6",
+    "openai-codex/gpt-5.3-codex-spark",
+    "openai-codex/gpt-5.3-codex",
+    "anthropic/claude-sonnet-4-6"
+  ],
+  "hideThinkingBlock": false,
+  "terminal": {
+    "showImages": true
+  },
+  "showHardwareCursor": true,
+  "contextFiles": {
+    "enabled": true
+  }
+}
