@@ -5,27 +5,27 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_before_compact", async (event, ctx) => {
 		const { preparation, customInstructions, signal } = event;
 
-		const model = ctx.modelRegistry.find("openai-codex", "gpt-5.3-codex-spark");
+		const model = ctx.modelRegistry.find("anthropic", "claude-sonnet-4-6");
 		if (!model) {
-			ctx.ui.notify("OpenAI Codex model not found, falling back to default compaction", "warning");
+			ctx.ui.notify("Anthropic Sonnet model not found, falling back to default compaction", "warning");
 			return;
 		}
 
 		const apiKey = await ctx.modelRegistry.getApiKey(model);
 		if (!apiKey) {
-			ctx.ui.notify("No API key for OpenAI Codex, falling back to default compaction", "warning");
+			ctx.ui.notify("No API key for Anthropic, falling back to default compaction", "warning");
 			return;
 		}
 
 		ctx.ui.notify(
-			`Compacting ${preparation.messagesToSummarize.length} messages (${preparation.tokensBefore.toLocaleString()} tokens) with openai-codex/gpt-5.3-codex-spark...`,
+			`Compacting ${preparation.messagesToSummarize.length} messages (${preparation.tokensBefore.toLocaleString()} tokens) with anthropic/claude-sonnet-4-6...`,
 			"info",
 		);
 
 		try {
 			const result = await compact(preparation, model, apiKey, customInstructions, signal);
 
-			ctx.ui.notify("Compaction complete (openai-codex/gpt-5.3-codex-spark)", "info");
+			ctx.ui.notify("Compaction complete (anthropic/claude-sonnet-4-6)", "info");
 
 			return { compaction: result };
 		} catch (error) {

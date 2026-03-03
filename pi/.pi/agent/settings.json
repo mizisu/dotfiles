@@ -1,22 +1,22 @@
 {
-	"lastChangelogVersion": "0.54.0",
-	"defaultProvider": "anthropic",
-	"defaultModel": "claude-opus-4-6",
-	"theme": "catppuccin-macchiato",
-	"editorPaddingX": 1,
-	"defaultThinkingLevel": "xhigh",
-	"enabledModels": [
-		"anthropic/claude-opus-4-6",
-		"openai-codex/gpt-5.3-codex-spark",
-		"openai-codex/gpt-5.3-codex",
-		"anthropic/claude-sonnet-4-6"
-	],
-	"hideThinkingBlock": false,
-	"terminal": {
-		"showImages": true
-	},
-	"showHardwareCursor": true,
-	"contextFiles": {
-		"enabled": true
-	}
+  "lastChangelogVersion": "0.55.3",
+  "defaultProvider": "anthropic",
+  "defaultModel": "claude-sonnet-4-6",
+  "theme": "catppuccin-macchiato",
+  "editorPaddingX": 1,
+  "defaultThinkingLevel": "xhigh",
+  "enabledModels": [
+    "anthropic/claude-opus-4-6",
+    "openai-codex/gpt-5.3-codex",
+    "anthropic/claude-sonnet-4-6"
+  ],
+  "hideThinkingBlock": false,
+  "terminal": {
+    "showImages": true
+  },
+  "showHardwareCursor": true,
+  "contextFiles": {
+    "enabled": true
+  },
+  "doubleEscapeAction": "tree"
 }

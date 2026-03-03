@@ -42,6 +42,13 @@ export interface WorkspaceSymbol {
   containerName?: string;
 }
 
+export type WatchedFileChangeType = "created" | "changed" | "deleted";
+
+export interface WatchedFileChange {
+  path: string;
+  type: WatchedFileChangeType;
+}
+
 const SEVERITY_MAP: Record<number, Diagnostic["severity"]> = {
   1: "error",
   2: "warning",
@@ -190,6 +197,10 @@ export class LSPClient {
           workspace: {
             workspaceFolders: true,
             symbol: { dynamicRegistration: false },
+            didChangeWatchedFiles: {
+              dynamicRegistration: false,
+              relativePatternSupport: false,
+            },
           },
         },
       });
@@ -261,6 +272,23 @@ export class LSPClient {
     }
   }
 
+  private async closeIfOpen(filePath: string): Promise<void> {
+    const abs = resolve(filePath);
+    if (!this.openFiles.has(abs)) {
+      this.fileVersions.delete(abs);
+      this.diagnostics.delete(abs);
+      return;
+    }
+
+    await this.connection.sendNotification("textDocument/didClose", {
+      textDocument: { uri: pathToUri(abs) },
+    }).catch(() => {});
+
+    this.openFiles.delete(abs);
+    this.fileVersions.delete(abs);
+    this.diagnostics.delete(abs);
+  }
+
   async notifyChanged(filePath: string): Promise<void> {
     if (this.dead || !this.ready) return;
     const abs = resolve(filePath);
@@ -285,6 +313,34 @@ export class LSPClient {
     } catch {
       // file deleted
     }
+  }
+
+  async notifyWatchedFilesChanged(changes: WatchedFileChange[]): Promise<void> {
+    if (this.dead || !this.ready || changes.length === 0) return;
+
+    const normalized = changes.map((c) => ({
+      path: resolve(c.path),
+      type: c.type,
+    }));
+
+    await Promise.all(
+      normalized
+        .filter((c) => c.type === "deleted")
+        .map((c) => this.closeIfOpen(c.path)),
+    );
+
+    const kindMap: Record<WatchedFileChangeType, number> = {
+      created: 1,
+      changed: 2,
+      deleted: 3,
+    };
+
+    await this.connection.sendNotification("workspace/didChangeWatchedFiles", {
+      changes: normalized.map((c) => ({
+        uri: pathToUri(c.path),
+        type: kindMap[c.type],
+      })),
+    }).catch(() => {});
   }
 
   async definition(

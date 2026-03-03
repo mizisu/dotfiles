@@ -42,7 +42,7 @@ require("lazy").setup({
 
     -- { import = "lazyvim.plugins.extras.ui.mini-animate" },
 
-    { import = "lazyvim.plugins.extras.ai.copilot" },
+    -- { import = "lazyvim.plugins.extras.ai.copilot" },
 
     { import = "lazyvim.plugins.extras.formatting.biome" },
     { import = "lazyvim.plugins.extras.linting.eslint" },

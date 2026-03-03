@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import {
   DynamicBorder,
   truncateHead,
@@ -7,13 +7,149 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { Container, SelectList, Text, type SelectItem } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
-import { resolve, extname, relative } from "node:path";
-import { readFileSync } from "node:fs";
-import { LSPClient, type Diagnostic, type Location, type WorkspaceSymbol } from "./client.js";
+import { spawnSync } from "node:child_process";
+import { resolve, extname, relative, dirname, join } from "node:path";
+import { readFileSync, existsSync, statSync, watch, type FSWatcher } from "node:fs";
+import {
+  LSPClient,
+  type Diagnostic,
+  type Location,
+  type WorkspaceSymbol,
+  type WatchedFileChange,
+} from "./client.js";
 import { detectServers } from "./servers.js";
 
 const TS_EXTS = new Set([".ts", ".tsx", ".js", ".jsx"]);
 const PY_EXTS = new Set([".py"]);
+const FULL_REINDEX_THRESHOLD = 400;
+const GIT_HEAD_POLL_MS = 10000;
+
+type RepoChangeType = "created" | "changed" | "deleted";
+
+interface RepoFileChange {
+  path: string;
+  type: RepoChangeType;
+}
+
+function findGitHeadPath(startDir: string): string | null {
+  let dir = resolve(startDir);
+  while (true) {
+    const gitPath = join(dir, ".git");
+    if (existsSync(gitPath)) {
+      try {
+        const stat = statSync(gitPath);
+        if (stat.isFile()) {
+          const content = readFileSync(gitPath, "utf8").trim();
+          if (content.startsWith("gitdir: ")) {
+            const gitDir = content.slice(8).trim();
+            const headPath = resolve(dir, gitDir, "HEAD");
+            if (existsSync(headPath)) return headPath;
+          }
+        } else if (stat.isDirectory()) {
+          const headPath = join(gitPath, "HEAD");
+          if (existsSync(headPath)) return headPath;
+        }
+      } catch {
+        return null;
+      }
+    }
+
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+function runGit(cwd: string, args: string[]): string | null {
+  const result = spawnSync("git", args, {
+    cwd,
+    encoding: "utf-8",
+    timeout: 5000,
+  });
+  if (result.status !== 0) return null;
+  return (result.stdout ?? "").trim();
+}
+
+function getGitHead(cwd: string): string | null {
+  return runGit(cwd, ["rev-parse", "--verify", "HEAD"]);
+}
+
+function parseGitNameStatus(output: string): RepoFileChange[] {
+  const byPath = new Map<string, RepoChangeType>();
+  const priority: Record<RepoChangeType, number> = {
+    created: 1,
+    changed: 2,
+    deleted: 3,
+  };
+
+  function upsert(filePath: string, type: RepoChangeType) {
+    const prev = byPath.get(filePath);
+    if (!prev || priority[type] > priority[prev]) byPath.set(filePath, type);
+  }
+
+  for (const raw of output.split("\n")) {
+    if (!raw.trim()) continue;
+
+    const cols = raw.split("\t");
+    if (cols.length < 2) continue;
+
+    const status = cols[0] ?? "";
+    const kind = status[0] ?? "M";
+
+    if (kind === "R") {
+      const from = cols[1];
+      const to = cols[2];
+      if (from) upsert(from, "deleted");
+      if (to) upsert(to, "created");
+      continue;
+    }
+
+    if (kind === "C") {
+      const to = cols[2] ?? cols[1];
+      if (to) upsert(to, "created");
+      continue;
+    }
+
+    const filePath = cols[1];
+    if (!filePath) continue;
+
+    if (kind === "A") upsert(filePath, "created");
+    else if (kind === "D") upsert(filePath, "deleted");
+    else upsert(filePath, "changed");
+  }
+
+  return [...byPath.entries()].map(([path, type]) => ({ path, type }));
+}
+
+function getGitDiffChanges(cwd: string, oldHead: string, newHead: string): RepoFileChange[] | null {
+  const output = runGit(cwd, ["diff", "--name-status", "--find-renames", oldHead, newHead]);
+  if (output === null) return null;
+  return parseGitNameStatus(output);
+}
+
+function isConfigAffectingFile(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, "/");
+  const base = normalized.split("/").pop() ?? normalized;
+
+  return (
+    /^tsconfig(\..+)?\.json$/i.test(base) ||
+    /^jsconfig(\..+)?\.json$/i.test(base) ||
+    /^requirements(\..+)?\.txt$/i.test(base) ||
+    base === "package.json" ||
+    base === "pnpm-workspace.yaml" ||
+    base === "yarn.lock" ||
+    base === "pyproject.toml" ||
+    base === "poetry.lock" ||
+    base === "Pipfile" ||
+    base === "Pipfile.lock" ||
+    base === "go.mod" ||
+    base === "go.sum"
+  );
+}
+
+function shouldFullReindex(changes: RepoFileChange[]): boolean {
+  return changes.length >= FULL_REINDEX_THRESHOLD || changes.some((c) => isConfigAffectingFile(c.path));
+}
 
 function getLanguage(filePath: string): "typescript" | "python" | null {
   const ext = extname(filePath);
@@ -90,6 +226,28 @@ export default function (pi: ExtensionAPI) {
   let clients: LSPClient[] = [];
   let projectRoot = "";
   let initPromise: Promise<void> | null = null;
+  let currentCtx: ExtensionContext | null = null;
+
+  let gitHeadWatcher: FSWatcher | null = null;
+  let gitHeadPollTimer: ReturnType<typeof setInterval> | null = null;
+  let lastGitHead: string | null = null;
+  let branchSyncInFlight = false;
+  let branchSyncQueued = false;
+
+  let symbolGeneration = 0;
+  let reindexing = false;
+
+  function updateStatus(ctx: ExtensionContext) {
+    if (!ctx.hasUI) return;
+    const alive = clients.filter((c) => c.isAlive());
+    if (alive.length === 0) {
+      ctx.ui.setStatus("lsp", undefined);
+      return;
+    }
+
+    const suffix = reindexing ? ` • reindexing g${symbolGeneration}` : "";
+    ctx.ui.setStatus("lsp", ctx.ui.theme.fg("dim", `LSP: ${alive.map((c) => c.name).join(", ")}${suffix}`));
+  }
 
   async function getClient(filePath: string): Promise<LSPClient | null> {
     const lang = getLanguage(filePath);
@@ -101,36 +259,232 @@ export default function (pi: ExtensionAPI) {
   function startServers(cwd: string) {
     projectRoot = cwd;
     const configs = detectServers(projectRoot);
-    if (configs.length === 0) { initPromise = Promise.resolve(); return; }
+    if (configs.length === 0) {
+      clients = [];
+      initPromise = Promise.resolve();
+      if (currentCtx) updateStatus(currentCtx);
+      return;
+    }
 
     clients = configs.map((config) => {
       const wsRoot = config.workspaceSubdir ? resolve(projectRoot, config.workspaceSubdir) : projectRoot;
       return new LSPClient(config.name, config.command, config.args, wsRoot, config.language, config.env);
     });
+
     initPromise = (async () => {
       await Promise.allSettled(clients.map(async (c) => {
         try { await c.waitReady(); }
         catch (e) { console.error(`[lsp] ${c.name} failed: ${e}`); }
       }));
+      if (currentCtx) updateStatus(currentCtx);
     })();
+  }
+
+  async function shutdownServers() {
+    await Promise.allSettled(clients.map((c) => c.shutdown()));
+    clients = [];
+    initPromise = null;
+    if (currentCtx) updateStatus(currentCtx);
+  }
+
+  async function restartServers(reason: string) {
+    await shutdownServers();
+    startServers(projectRoot);
+    if (initPromise) await initPromise;
+    if (currentCtx?.hasUI) currentCtx.ui.notify(`LSP restarted (${reason})`, "info");
+  }
+
+  async function applyIncrementalBranchChanges(changes: RepoFileChange[]) {
+    if (changes.length === 0) return;
+    if (initPromise) await initPromise;
+
+    const byClient = new Map<LSPClient, WatchedFileChange[]>();
+    for (const client of clients) {
+      if (!client.isAlive()) continue;
+      byClient.set(client, []);
+    }
+
+    for (const change of changes) {
+      const lang = getLanguage(change.path);
+      if (!lang) continue;
+
+      const absPath = resolve(projectRoot, change.path);
+      for (const client of clients) {
+        if (!client.isAlive() || client.language !== lang) continue;
+        byClient.get(client)?.push({ path: absPath, type: change.type });
+      }
+    }
+
+    await Promise.allSettled(
+      [...byClient.entries()]
+        .filter(([, entries]) => entries.length > 0)
+        .map(([client, entries]) => client.notifyWatchedFilesChanged(entries)),
+    );
+
+    // Warm one file per language to trigger lazy index refresh in some servers.
+    const warmupByLang = new Map<string, string>();
+    for (const change of changes) {
+      if (change.type === "deleted") continue;
+      const lang = getLanguage(change.path);
+      if (!lang || warmupByLang.has(lang)) continue;
+      warmupByLang.set(lang, resolve(projectRoot, change.path));
+    }
+
+    await Promise.allSettled(
+      [...warmupByLang.entries()].map(async ([lang, absPath]) => {
+        const client = clients.find((c) => c.language === lang && c.isAlive());
+        if (!client) return;
+        await client.notifyChanged(absPath);
+      }),
+    );
+  }
+
+  async function syncGitHead(source: string) {
+    if (!projectRoot) return;
+
+    const nextHead = getGitHead(projectRoot);
+    if (!nextHead) return;
+
+    if (!lastGitHead) {
+      lastGitHead = nextHead;
+      return;
+    }
+
+    if (nextHead === lastGitHead) return;
+
+    const prevHead = lastGitHead;
+    lastGitHead = nextHead;
+
+    symbolGeneration += 1;
+    reindexing = true;
+    if (currentCtx) updateStatus(currentCtx);
+
+    try {
+      const changes = getGitDiffChanges(projectRoot, prevHead, nextHead);
+      if (!changes) {
+        await restartServers(`branch switch via ${source}: diff unavailable`);
+        return;
+      }
+
+      if (shouldFullReindex(changes)) {
+        const reason = changes.length >= FULL_REINDEX_THRESHOLD
+          ? `branch switch via ${source}: ${changes.length} changed files`
+          : `branch switch via ${source}: project config changed`;
+        await restartServers(reason);
+        return;
+      }
+
+      await applyIncrementalBranchChanges(changes);
+    } finally {
+      reindexing = false;
+      if (currentCtx) updateStatus(currentCtx);
+    }
+  }
+
+  function scheduleGitHeadSync(source: string) {
+    if (branchSyncInFlight) {
+      branchSyncQueued = true;
+      return;
+    }
+
+    branchSyncInFlight = true;
+    void syncGitHead(source)
+      .catch((e) => {
+        console.error(`[lsp] git sync failed: ${e}`);
+      })
+      .finally(() => {
+        branchSyncInFlight = false;
+        if (branchSyncQueued) {
+          branchSyncQueued = false;
+          scheduleGitHeadSync("queued");
+        }
+      });
+  }
+
+  function stopGitHeadTracking() {
+    if (gitHeadWatcher) {
+      gitHeadWatcher.close();
+      gitHeadWatcher = null;
+    }
+    if (gitHeadPollTimer) {
+      clearInterval(gitHeadPollTimer);
+      gitHeadPollTimer = null;
+    }
+    branchSyncInFlight = false;
+    branchSyncQueued = false;
+  }
+
+  function startGitHeadTracking() {
+    stopGitHeadTracking();
+    if (!projectRoot) return;
+
+    lastGitHead = getGitHead(projectRoot);
+
+    const headPath = findGitHeadPath(projectRoot);
+    if (headPath) {
+      const gitDir = dirname(headPath);
+      try {
+        gitHeadWatcher = watch(gitDir, (_eventType, filename) => {
+          if (!filename || filename.toString() === "HEAD") {
+            scheduleGitHeadSync("fs-watch");
+          }
+        });
+      } catch {
+        gitHeadWatcher = null;
+      }
+    }
+
+    gitHeadPollTimer = setInterval(() => {
+      scheduleGitHeadSync("poll");
+    }, GIT_HEAD_POLL_MS);
   }
 
   // ── Lifecycle ──────────────────────────────────────────────
 
   pi.on("session_start", async (_event, ctx) => {
+    currentCtx = ctx;
+    symbolGeneration = 0;
+    reindexing = false;
     startServers(ctx.cwd);
-    initPromise?.then(() => {
-      const alive = clients.filter((c) => c.isAlive());
-      if (alive.length > 0) {
-        ctx.ui.setStatus("lsp", ctx.ui.theme.fg("dim", `LSP: ${alive.map((c) => c.name).join(", ")}`));
+
+    if (clients.length > 0) {
+      if (ctx.hasUI) {
+        ctx.ui.setStatus("lsp", ctx.ui.theme.fg("dim", `LSP: starting ${clients.map((c) => c.name).join(", ")}…`));
       }
-    });
+      startGitHeadTracking();
+    } else {
+      stopGitHeadTracking();
+      updateStatus(ctx);
+    }
+  });
+
+  pi.on("session_switch", async (_event, ctx) => {
+    currentCtx = ctx;
+    if (ctx.cwd === projectRoot) {
+      updateStatus(ctx);
+      return;
+    }
+
+    stopGitHeadTracking();
+    await shutdownServers();
+    startServers(ctx.cwd);
+
+    if (clients.length > 0) {
+      if (ctx.hasUI) {
+        ctx.ui.setStatus("lsp", ctx.ui.theme.fg("dim", `LSP: starting ${clients.map((c) => c.name).join(", ")}…`));
+      }
+      startGitHeadTracking();
+    } else {
+      updateStatus(ctx);
+    }
   });
 
   pi.on("session_shutdown", async () => {
-    await Promise.allSettled(clients.map((c) => c.shutdown()));
-    clients = [];
-    initPromise = null;
+    stopGitHeadTracking();
+    await shutdownServers();
+    currentCtx = null;
+    lastGitHead = null;
+    reindexing = false;
   });
 
   // ── Auto-diagnostics after edit/write ─────────────────────
@@ -273,7 +627,10 @@ export default function (pi: ExtensionAPI) {
     description: "Show LSP server status",
     handler: async (_args, ctx) => {
       if (clients.length === 0) { ctx.ui.notify("No LSP servers configured", "info"); return; }
-      ctx.ui.notify(clients.map((c) => `${c.name}: ${c.isAlive() ? "✅ running" : "❌ dead"}`).join("\n"), "info");
+      const head = lastGitHead ? lastGitHead.slice(0, 8) : "none";
+      const summary = `generation=${symbolGeneration} • ${reindexing ? "reindexing" : "idle"} • HEAD=${head}`;
+      const servers = clients.map((c) => `${c.name}: ${c.isAlive() ? "✅ running" : "❌ dead"}`);
+      ctx.ui.notify([summary, ...servers].join("\n"), "info");
     },
   });
 
@@ -299,8 +656,8 @@ export default function (pi: ExtensionAPI) {
 
       if (initPromise) await initPromise;
 
-      const pyClients = clients.filter((c) => c.language === "python" && c.isAlive());
-      if (pyClients.length === 0) { ctx.ui.notify("No Python LSP running", "warning"); return; }
+      const getPyClients = () => clients.filter((c) => c.language === "python" && c.isAlive());
+      if (getPyClients().length === 0) { ctx.ui.notify("No Python LSP running", "warning"); return; }
 
       const result = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
         let root = new Container();
@@ -330,8 +687,9 @@ export default function (pi: ExtensionAPI) {
             selectList.onSelect = (item) => done(item.value);
             selectList.onCancel = () => done(null);
             c.addChild(selectList);
-          } else if (searching) {
-            c.addChild(new Text(theme.fg("muted", "  Searching…"), 0, 0));
+          } else if (searching || reindexing) {
+            const msg = reindexing ? "  Indexing after branch change…" : "  Searching…";
+            c.addChild(new Text(theme.fg("muted", msg), 0, 0));
           } else if (query.length >= 2) {
             c.addChild(new Text(theme.fg("muted", "  No results"), 0, 0));
           }
@@ -345,14 +703,32 @@ export default function (pi: ExtensionAPI) {
           if (query.length < 2) { items = []; searching = false; rebuild(); tui.requestRender(); return; }
 
           const q = query;
+          const searchGeneration = symbolGeneration;
           activeQuery = q;
           searching = true;
           rebuild();
           tui.requestRender();
 
+          const pyClients = getPyClients();
+          if (pyClients.length === 0) {
+            searching = false;
+            items = [];
+            rebuild();
+            tui.requestRender();
+            return;
+          }
+
           Promise.all(pyClients.map((c) => c.workspaceSymbol(q)))
             .then((results) => {
               if (activeQuery !== q) return;
+              if (searchGeneration !== symbolGeneration) {
+                searching = false;
+                items = [];
+                rebuild();
+                tui.requestRender();
+                return;
+              }
+
               const symbols = rankSymbols(results.flat(), q);
               items = symbols.map((s) => {
                 const rel = s.file.startsWith(projectRoot) ? relative(projectRoot, s.file) : s.file;
@@ -365,6 +741,13 @@ export default function (pi: ExtensionAPI) {
                 };
               });
               searching = false;
+              rebuild();
+              tui.requestRender();
+            })
+            .catch(() => {
+              if (activeQuery !== q) return;
+              searching = false;
+              items = [];
               rebuild();
               tui.requestRender();
             });

@@ -26,8 +26,8 @@ gui:
   authorColors:
     '*': '#b7bdf8'
 os:
-  edit: "nvim --server $NVIM --remote {{filename}}"
-  editAtLine: "nvim --server $NVIM --remote {{filename}}; nvim --server $NVIM --remote-send ':{{line}}<CR>'"
+  edit: "nvim --server $NVIM --remote {{filename}} && nvim --server $NVIM --remote-send ':doautocmd User LazyGitEdit<CR>'"
+  editAtLine: "nvim --server $NVIM --remote {{filename}} && nvim --server $NVIM --remote-send ':{{line}}<CR>' && nvim --server $NVIM --remote-send ':doautocmd User LazyGitEdit<CR>'"
   editInTerminal: false
 customCommands:
   - key: 'G'

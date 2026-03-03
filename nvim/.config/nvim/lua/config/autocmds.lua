@@ -17,8 +17,10 @@ vim.api.nvim_create_autocmd("FileType", {
   desc = "Disable New Line Comment",
 })
 
--- Close lazygit window when a file is opened via --remote
-vim.api.nvim_create_autocmd("BufReadPost", {
+-- Close lazygit window when a file is opened via lazygit's edit command
+-- Triggered by custom User event sent from lazygit config's os.edit command
+vim.api.nvim_create_autocmd("User", {
+  pattern = "LazyGitEdit",
   callback = function()
     vim.schedule(function()
       for _, win in ipairs(vim.api.nvim_list_wins()) do
