@@ -73,7 +73,6 @@ X = [1, 'main']           # Finder
 W = [2, 1, 'main']        # Work (Terminal, DB, Excel, etc.)
 F = [2, 1, 'main']        # eXtra work (임시)
 E = [3, 2, 1, 'main']     # browsEr
-V = [2, 1, 'main']        # Notion
 
 
 # A callback that runs every time binding mode changes
@@ -177,7 +176,6 @@ on-mode-changed = []
     alt-w = 'workspace W' # Work (Terminal, DB, Excel, etc.)
     alt-f = 'workspace F' # eXtra work (임시)
     alt-e = 'workspace E' # browsEr
-    alt-v = 'workspace V' # Notion
     #
     # See: https://nikitabobko.github.io/AeroSpace/commands#move-node-to-workspace
     # alt-shift-1 = 'move-node-to-workspace 1'
@@ -238,6 +236,3 @@ run = 'move-node-to-workspace W'
 if.app-id = 'com.google.Chrome'
 run = 'move-node-to-workspace E'
 
-[[on-window-detected]]
-if.app-id = 'notion.id'
-run = 'move-node-to-workspace V'

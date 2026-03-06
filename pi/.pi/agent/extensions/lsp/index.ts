@@ -10,6 +10,7 @@ import { Type } from "@sinclair/typebox";
 import { spawnSync } from "node:child_process";
 import { resolve, extname, relative, dirname, join } from "node:path";
 import { readFileSync, existsSync, statSync, watch, type FSWatcher } from "node:fs";
+import { execFileSync } from "node:child_process";
 import {
   LSPClient,
   type Diagnostic,
@@ -487,16 +488,44 @@ export default function (pi: ExtensionAPI) {
     reindexing = false;
   });
 
+  // ── Format-on-write ────────────────────────────────────────
+
+  const FORMATTERS: Record<string, { command: string; args: (file: string) => string[] }> = {
+    ".py": { command: "uvx", args: (f) => ["ruff", "format", f] },
+    ".pyi": { command: "uvx", args: (f) => ["ruff", "format", f] },
+  };
+
+  function formatFile(absPath: string): boolean {
+    const ext = extname(absPath).toLowerCase();
+    const formatter = FORMATTERS[ext];
+    if (!formatter) return false;
+    try {
+      execFileSync(formatter.command, formatter.args(absPath), {
+        timeout: 10000,
+        stdio: "pipe",
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   // ── Auto-diagnostics after edit/write ─────────────────────
 
   pi.on("tool_result", async (event) => {
     if (event.toolName !== "edit" && event.toolName !== "write") return;
+    if (event.isError) return;
     const filePath = (event.input as any)?.path;
     if (!filePath) return;
+
+    const absPath = resolve(projectRoot, filePath);
+
+    // Format-on-write
+    const formatted = formatFile(absPath);
+
     const client = await getClient(filePath);
     if (!client) return;
 
-    const absPath = resolve(projectRoot, filePath);
     await client.notifyChanged(absPath);
     await new Promise((r) => setTimeout(r, 2000));
 

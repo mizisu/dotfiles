@@ -213,6 +213,8 @@ export default function (pi: ExtensionAPI) {
 				// Avoid immediate built-in @ autocomplete re-trigger after '@' shortcut
 				const current = ctx.ui.getEditorText();
 				ctx.ui.setEditorText(`${current}@${result} `);
+				// Force re-render after custom UI closes (setEditorText alone may not repaint)
+				ctx.ui.setStatus("_fzf-render", undefined);
 			} else {
 				ctx.ui.pasteToEditor(`@${result} `);
 			}

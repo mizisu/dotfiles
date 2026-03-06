@@ -1,7 +1,7 @@
 {
-  "lastChangelogVersion": "0.55.3",
-  "defaultProvider": "anthropic",
-  "defaultModel": "claude-sonnet-4-6",
+  "lastChangelogVersion": "0.56.2",
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-5.4",
   "theme": "catppuccin-macchiato",
   "editorPaddingX": 1,
   "defaultThinkingLevel": "xhigh",
@@ -18,5 +18,8 @@
   "contextFiles": {
     "enabled": true
   },
-  "doubleEscapeAction": "tree"
+  "doubleEscapeAction": "tree",
+  "packages": [
+    "https://github.com/nicobailon/visual-explainer"
+  ]
 }
