@@ -113,12 +113,27 @@ export default function (pi: ExtensionAPI) {
 				noMatch: () => theme.fg("warning", "  No matching entries"),
 			};
 
+			const getFolderPriority = (value: string, query: string) => {
+				if (!query.endsWith("/")) return 3;
+
+				const isDir = value.endsWith("/");
+				if (!isDir) return 3;
+				if (value === query) return 0;
+				if (value.startsWith(query)) return 1;
+				return 2;
+			};
+
 			let filteredItems: SelectItem[] = allItems;
 			let selectList = new SelectList(filteredItems, maxVisible, listTheme);
 			const applyFilter = (query: string) => {
-				filteredItems = query.trim()
-					? fuzzyFilter(allItems, query, (item) => `${item.value} ${ctx.cwd}/${item.value}`)
+				const trimmedQuery = query.trim();
+				const baseItems = trimmedQuery
+					? fuzzyFilter(allItems, trimmedQuery, (item) => `${item.value} ${ctx.cwd}/${item.value}`)
 					: allItems;
+
+				filteredItems = trimmedQuery.endsWith("/")
+					? [...baseItems].sort((a, b) => getFolderPriority(a.value, trimmedQuery) - getFolderPriority(b.value, trimmedQuery))
+					: baseItems;
 				selectList = new SelectList(filteredItems, maxVisible, listTheme);
 			};
 
