@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "0.56.2",
+  "lastChangelogVersion": "0.57.1",
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.4",
   "theme": "catppuccin-macchiato",
@@ -7,8 +7,8 @@
   "defaultThinkingLevel": "xhigh",
   "enabledModels": [
     "anthropic/claude-opus-4-6",
-    "openai-codex/gpt-5.3-codex",
-    "anthropic/claude-sonnet-4-6"
+    "anthropic/claude-sonnet-4-6",
+    "openai-codex/gpt-5.4"
   ],
   "hideThinkingBlock": false,
   "terminal": {
@@ -19,7 +19,5 @@
     "enabled": true
   },
   "doubleEscapeAction": "tree",
-  "packages": [
-    "https://github.com/nicobailon/visual-explainer"
-  ]
+  "packages": []
 }

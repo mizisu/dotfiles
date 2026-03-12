@@ -2,6 +2,7 @@
 name: first-principles
 description: 문제나 주제를 제1원리(First Principles) 방식으로 분석하여 근본적 해결책을 도출합니다. 기존 관행과 가정을 해체하고, 더 이상 분해할 수 없는 근본 진실만으로 해결책을 처음부터 재구성합니다. 10x 혁신이 필요하거나, 모범 사례가 실패하거나, 새로운 영역의 문제를 풀 때 사용하세요.
 argument-hint: '<문제|주제|질문> (예: 배터리 비용 절감, 배포 시간 단축, 왜 CI가 느린가)'
+disable-model-invocation: true
 ---
 
 # First Principles Thinking - 제1원리 기반 문제 분석

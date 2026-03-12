@@ -117,8 +117,8 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 - Use `code_search` more than 2-3 times for the same concept — switch tools.
 - Apply a `language` filter on the first search attempt.
 
-## 6. 환경 규칙
+## 6. Environment Rules
 
-- Python 실행: `uv run python` 사용 (`python`, `python3` 아님)
-- ripgrep: `rg -t py "패턴"` 사용 (`--include` 옵션 없음, `-g '*.py'` 또는 `-t py` 사용)
-- `grep` 대신 `rg` 사용
+- Run Python with `uv run python` (not `python` or `python3`)
+- Use ripgrep: `rg -t py "pattern"` (no `--include` flag; use `-g '*.py'` or `-t py`)
+- Use `rg` instead of `grep`
