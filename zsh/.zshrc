@@ -136,10 +136,9 @@ alias gs="git branch -a | sed 's/remotes\/origin\///' | sort -u | fzf | xargs gi
 alias gb="git branch -a | sed 's/remotes\/origin\///' | sort -u | fzf"
 alias mypr="gh pr list -a @me | fzf | sed -n 's/^\([0-9]*\).*/\1/p' | xargs gh pr checkout"
 alias review="gh pr list -S 'user-review-requested:@me' | fzf | sed -n 's/^\([0-9]*\).*/\1/p' | xargs gh pr checkout"
-alias dump-temp="./scripts/dumpdb.sh lemonbase_temp --recreate --test && mysql -h127.0.0.1 -uroot -prootpw -e 'DROP DATABASE IF EXISTS test_lemonbase_temp'"
 
 # CodeRabbit
-alias cr-review='git fetch origin $(base-ref):$(base-ref) &&  cr review --base=$(base-ref)'
+alias cr-review='git fetch origin $(base-ref):$(base-ref) &&  cr review --base=$(base-ref) --prompt-only'
 
 # VIM
 alias vim='rm -f ~/.cache/nvim/server.pipe && nvim --listen ~/.cache/nvim/server.pipe'
@@ -173,10 +172,6 @@ alias pwoc='\
   QUERYPIE_PASSWORD=$(op item get mnjfg6b4stmu2pet52jttfk4sq --reveal --fields password) \
   opencode'
 
-
-# AWS
-alias awsdev='./scripts/aws/get_aws_access_token.py --serial-number arn:aws:iam::455628414130:mfa/charles@lemonbase.com  --token=$(op item get 3xbm2z37nniqk5k2mojzcyhj2m --otp)'
-
 # eza
 alias ls='eza'
 
@@ -185,6 +180,8 @@ export EDITOR=/opt/homebrew/bin/nvim
 # Lemonbase
 alias bastion="tsh ssh -A ubuntu@bastion-prod"
 alias bastion-dev="ssh bastion-dev"
+alias awsdev='./scripts/aws/get_aws_access_token.py --serial-number arn:aws:iam::455628414130:mfa/charles@lemonbase.com  --token=$(op item get 3xbm2z37nniqk5k2mojzcyhj2m --otp)'
+alias dump-temp="./scripts/dumpdb.sh lemonbase_temp --recreate --test && mysql -h127.0.0.1 -uroot -prootpw -e 'DROP DATABASE IF EXISTS test_lemonbase_temp'"
 
 function uuid() { python3 -c "import uuid; arg_uuid='$1';" }
 
