@@ -674,15 +674,6 @@ export default function (pi: ExtensionAPI) {
     handler: async (ctx) => {
       if (!ctx.hasUI) return;
 
-      // Custom shortcuts are handled before normal text input.
-      // If '#' is typed in the middle of a token, insert it as plain text.
-      const existingText = ctx.ui.getEditorText();
-      const prevChar = existingText.slice(-1);
-      if (existingText.length > 0 && !/\s/.test(prevChar)) {
-        ctx.ui.setEditorText(existingText + "#");
-        return;
-      }
-
       if (initPromise) await initPromise;
 
       const getPyClients = () => clients.filter((c) => c.language === "python" && c.isAlive());
@@ -811,17 +802,12 @@ export default function (pi: ExtensionAPI) {
             tui.requestRender();
           },
         };
-      });
+      }, { overlay: true });
 
       if (result) {
         const [file, line] = result.split(":");
         const text = `${file}:${line}`;
-        // setEditorText replaces all content — append to existing text instead
-        const existing = ctx.ui.getEditorText();
-        ctx.ui.setEditorText(existing + text);
-        // Force re-render: setEditorText doesn't trigger requestRender(),
-        // and restoreEditor()'s render fires before we get here (nextTick > microtask).
-        ctx.ui.setStatus("_lsp-render", undefined);
+        ctx.ui.pasteToEditor(text);
       }
     },
   });

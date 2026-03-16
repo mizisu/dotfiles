@@ -82,13 +82,7 @@ function getEntries(cwd: string): string[] {
 }
 
 export default function (pi: ExtensionAPI) {
-	const isAtTriggerContext = (text: string): boolean => {
-		if (text.length === 0) return true;
-		const prev = text[text.length - 1] ?? "";
-		return /\s/.test(prev);
-	};
-
-	async function openFilePicker(ctx: ExtensionContext, insertMode: "paste" | "append" = "paste") {
+	async function openFilePicker(ctx: ExtensionContext) {
 		const entries = getEntries(ctx.cwd);
 
 		if (entries.length === 0) {
@@ -221,31 +215,17 @@ export default function (pi: ExtensionAPI) {
 			};
 
 			return comp;
-		});
+		}, { overlay: true });
 
 		if (result) {
-			if (insertMode === "append") {
-				// Avoid immediate built-in @ autocomplete re-trigger after '@' shortcut
-				const current = ctx.ui.getEditorText();
-				ctx.ui.setEditorText(`${current}@${result} `);
-				// Force re-render after custom UI closes (setEditorText alone may not repaint)
-				ctx.ui.setStatus("_fzf-render", undefined);
-			} else {
-				ctx.ui.pasteToEditor(`@${result} `);
-			}
+			ctx.ui.pasteToEditor(`@${result} `);
 		}
 	}
 
 	pi.registerShortcut("@", {
 		description: "Open file picker",
 		handler: async (ctx) => {
-			const current = ctx.ui.getEditorText();
-			if (!isAtTriggerContext(current)) {
-				// Literal @ typing when not in attachment context
-				ctx.ui.pasteToEditor("@");
-				return;
-			}
-			await openFilePicker(ctx, "append");
+			await openFilePicker(ctx);
 		},
 	});
 
