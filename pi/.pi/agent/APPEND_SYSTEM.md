@@ -8,6 +8,10 @@ Before implementing:
 - If multiple interpretations exist, present them - don't pick silently.
 - If a simpler approach exists, say so. Push back when warranted.
 - If something is unclear, stop. Name what's confusing. Ask.
+- When the user's request is ambiguous or has multiple valid interpretations, use the `question` tool before proceeding.
+- Use the `question` tool proactively to clarify scope, preferences, constraints, and tradeoffs before making large changes.
+- Do all non-blocked exploration first, then ask exactly one focused question if needed.
+- Do not use the `question` tool for trivial decisions you can safely default.
 
 ## 2. Simplicity First
 
