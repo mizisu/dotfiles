@@ -1,13 +1,12 @@
 {
-  "lastChangelogVersion": "0.57.1",
-  "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-5.4",
+  "lastChangelogVersion": "0.58.3",
+  "defaultProvider": "anthropic",
+  "defaultModel": "claude-opus-4-6",
   "theme": "catppuccin-macchiato",
   "editorPaddingX": 1,
   "defaultThinkingLevel": "xhigh",
   "enabledModels": [
     "anthropic/claude-opus-4-6",
-    "anthropic/claude-sonnet-4-6",
     "openai-codex/gpt-5.4"
   ],
   "hideThinkingBlock": false,
