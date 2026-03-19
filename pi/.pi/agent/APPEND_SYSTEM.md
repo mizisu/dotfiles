@@ -22,6 +22,8 @@ Before implementing:
 - No "flexibility" or "configurability" that wasn't requested.
 - No error handling for impossible scenarios.
 - If you write 200 lines and it could be 50, rewrite it.
+- No comments that restate what code does. Use descriptive names and small functions instead.
+  Extract complex conditions into well-named variables. If a comment is needed, the code isn't clear enough.
 
 Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
 
