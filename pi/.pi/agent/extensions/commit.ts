@@ -383,6 +383,21 @@ export default function (pi: ExtensionAPI) {
 				);
 			}
 
+			// 7. optional push
+			if (completedCommits.length > 0 && !fixError) {
+				if (await ctx.ui.confirm("Push", "Push to remote?")) {
+					ctx.ui.setStatus("commit", "Pushing…");
+					const pushRes = await pi.exec("git", ["push"]);
+					ctx.ui.setStatus("commit", undefined);
+					if (pushRes.code === 0) {
+						ctx.ui.notify("Pushed successfully", "info");
+					} else {
+						const pushError = [pushRes.stdout, pushRes.stderr].filter(Boolean).join("\n").trim();
+						ctx.ui.notify(`Push failed: ${pushError}`, "error");
+					}
+				}
+			}
+
 			if (fixError) {
 				pi.sendUserMessage(
 					`Pre-commit hook failed during /commit. Please fix the issues:\n\`\`\`\n${fixError}\n\`\`\``,
