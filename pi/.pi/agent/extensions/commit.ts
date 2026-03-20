@@ -33,7 +33,10 @@ Output ONLY valid JSON — no markdown fences, no explanation:
 Rules:
 - files value: "all" = whole file, [0, 2] = hunk indices (0-based, per file)
 - Group by PURPOSE (why changed), not by file
-- Subject: match convention from git log exactly (format, language, tone)
+- Subject: MUST use Conventional Commits format: <type>(<optional scope>): <description>
+  - Types: feat, fix, refactor, chore, docs, style, test, perf, ci, build
+  - Match language and tone from git log, but ALWAYS use this format
+  - NEVER include issue tracker references (e.g. JIRA tags like [XXX-123], PROJECT-456)
 - Description: omit or set "" when the subject alone sufficiently conveys the intent. Include only when additional context about WHY is needed.
 - Order commits by dependency
 - Use hunk indices only when one file's changes serve different purposes
