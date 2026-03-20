@@ -157,7 +157,7 @@ export default function (pi: ExtensionAPI) {
 			const [log, status, diff, untracked] = await Promise.all([
 				pi.exec("git", ["log", "-3", "--format=%s%n%b---"]),
 				pi.exec("git", ["status", "--short"]),
-				pi.exec("git", ["diff", "HEAD"]),
+				pi.exec("git", ["diff", "--relative", "HEAD"]),
 				pi.exec("git", ["ls-files", "--others", "--exclude-standard"]),
 			]);
 
@@ -266,7 +266,7 @@ export default function (pi: ExtensionAPI) {
 					}
 
 					// hunk-level: get current diff, match by fingerprint
-					const cur = parseDiff((await pi.exec("git", ["diff", "HEAD", "--", file])).stdout);
+					const cur = parseDiff((await pi.exec("git", ["diff", "--relative", "HEAD", "--", file])).stdout);
 					const curFile = cur[0];
 					if (!curFile) {
 						await pi.exec("git", ["add", "--", file]);
