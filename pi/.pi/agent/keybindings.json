@@ -1,3 +1,5 @@
 {
-  "newLine": ["shift+enter"]
+  "tui.input.newLine": [
+    "shift+enter"
+  ]
 }
