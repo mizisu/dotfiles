@@ -125,6 +125,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ## 6. Environment Rules
 
+- `edit`/`write` tools auto-format and run LSP diagnostics. Don't re-run formatters or `get_diagnostics` on files you just modified.
 - Run Python with `uv run python` (not `python` or `python3`)
 - Use ripgrep: `rg -t py "pattern"` (no `--include` flag; use `-g '*.py'` or `-t py`)
 - Use `rg` instead of `grep`

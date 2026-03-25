@@ -38,6 +38,11 @@ Rules:
   - Match language and tone from git log, but ALWAYS use this format
   - NEVER include issue tracker references (e.g. JIRA tags like [XXX-123], PROJECT-456)
 - Description: omit or set "" when the subject alone sufficiently conveys the intent. Include only when additional context about WHY is needed.
+- EVERY COMMIT MUST BE INDEPENDENTLY BUILDABLE AND RUNNABLE. No commit may leave the codebase in a broken state.
+  - Never split tightly coupled changes (e.g. interface + implementation, import + usage, rename across files) into separate commits
+  - If a function is added in file A and called in file B, both MUST be in the same commit
+  - If splitting would break compilation, type-checking, or runtime behavior at any intermediate commit, DO NOT split — keep them together
+  - When in doubt, fewer bigger commits that work > many small commits that break
 - Order commits by dependency
 - Use hunk indices only when one file's changes serve different purposes
 - Git diff, git status, and untracked files are the source of truth

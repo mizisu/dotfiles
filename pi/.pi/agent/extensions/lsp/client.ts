@@ -102,6 +102,7 @@ export class LSPClient {
     private workspaceRoot: string,
     language: string,
     env?: Record<string, string>,
+    private settings?: Record<string, any>,
   ) {
     this.language = language;
 
@@ -151,6 +152,15 @@ export class LSPClient {
         );
       },
     );
+
+    // Handle workspace/configuration requests (pull model, used by pyright)
+    this.connection.onRequest("workspace/configuration", (params: any) => {
+      return (params.items ?? []).map((item: any) => {
+        if (!this.settings) return {};
+        if (!item.section) return this.settings;
+        return item.section.split(".").reduce((obj: any, key: string) => obj?.[key], this.settings) ?? {};
+      });
+    });
 
     this.connection.onError(() => {});
     this.connection.onClose(() => {
@@ -206,6 +216,13 @@ export class LSPClient {
       });
 
       this.connection.sendNotification("initialized", {});
+
+      if (this.settings) {
+        this.connection.sendNotification("workspace/didChangeConfiguration", {
+          settings: this.settings,
+        });
+      }
+
       this.ready = true;
 
       // Auto-open an entry file so tsserver creates a project

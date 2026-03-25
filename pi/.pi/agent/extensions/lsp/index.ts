@@ -225,6 +225,7 @@ function symbolAt(root: string, filePath: string, line: number, character: numbe
 
 export default function (pi: ExtensionAPI) {
   let clients: LSPClient[] = [];
+  const diagnosticsOnlyClients = new Set<LSPClient>();
   let projectRoot = "";
   let initPromise: Promise<void> | null = null;
   let currentCtx: ExtensionContext | null = null;
@@ -250,15 +251,21 @@ export default function (pi: ExtensionAPI) {
     ctx.ui.setStatus("lsp", ctx.ui.theme.fg("dim", `LSP: ${alive.map((c) => c.name).join(", ")}${suffix}`));
   }
 
-  async function getClient(filePath: string): Promise<LSPClient | null> {
+  async function getClient(filePath: string, forDiagnostics = false): Promise<LSPClient | null> {
     const lang = getLanguage(filePath);
     if (!lang) return null;
     if (initPromise) await initPromise;
-    return clients.find((c) => c.language === lang && c.isAlive()) ?? null;
+    if (forDiagnostics) {
+      return clients.find((c) => c.language === lang && c.isAlive() && diagnosticsOnlyClients.has(c))
+        ?? clients.find((c) => c.language === lang && c.isAlive()) ?? null;
+    }
+    return clients.find((c) => c.language === lang && c.isAlive() && !diagnosticsOnlyClients.has(c))
+      ?? clients.find((c) => c.language === lang && c.isAlive()) ?? null;
   }
 
   function startServers(cwd: string) {
     projectRoot = cwd;
+    jsFormatters = null;
     const configs = detectServers(projectRoot);
     if (configs.length === 0) {
       clients = [];
@@ -267,9 +274,12 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
+    diagnosticsOnlyClients.clear();
     clients = configs.map((config) => {
       const wsRoot = config.workspaceSubdir ? resolve(projectRoot, config.workspaceSubdir) : projectRoot;
-      return new LSPClient(config.name, config.command, config.args, wsRoot, config.language, config.env);
+      const client = new LSPClient(config.name, config.command, config.args, wsRoot, config.language, config.env, config.settings);
+      if (config.diagnosticsOnly) diagnosticsOnlyClients.add(client);
+      return client;
     });
 
     initPromise = (async () => {
@@ -284,6 +294,7 @@ export default function (pi: ExtensionAPI) {
   async function shutdownServers() {
     await Promise.allSettled(clients.map((c) => c.shutdown()));
     clients = [];
+    diagnosticsOnlyClients.clear();
     initPromise = null;
     if (currentCtx) updateStatus(currentCtx);
   }
@@ -490,14 +501,40 @@ export default function (pi: ExtensionAPI) {
 
   // ── Format-on-write ────────────────────────────────────────
 
-  const FORMATTERS: Record<string, { command: string; args: (file: string) => string[] }> = {
+  type Formatter = { command: string; args: (file: string) => string[] };
+
+  const PY_FORMATTERS: Record<string, Formatter> = {
     ".py": { command: "uvx", args: (f) => ["ruff", "format", f] },
     ".pyi": { command: "uvx", args: (f) => ["ruff", "format", f] },
   };
 
+  function detectJsFormatter(): Record<string, Formatter> {
+    if (!projectRoot) return {};
+    const biomeNames = ["biome.json", "biome.jsonc"];
+    const prettierNames = [".prettierrc", ".prettierrc.json", ".prettierrc.js", ".prettierrc.cjs", ".prettierrc.mjs", ".prettierrc.yml", ".prettierrc.yaml", ".prettierrc.toml", "prettier.config.js", "prettier.config.cjs", "prettier.config.mjs"];
+    const hasBiome = biomeNames.some((n) => existsSync(resolve(projectRoot, n)));
+    const hasPrettier = prettierNames.some((n) => existsSync(resolve(projectRoot, n)));
+
+    let fmt: Formatter | null = null;
+    if (hasBiome) fmt = { command: "npx", args: (f) => ["@biomejs/biome", "format", "--write", f] };
+    else if (hasPrettier) fmt = { command: "npx", args: (f) => ["prettier", "--write", f] };
+
+    if (!fmt) return {};
+    const result: Record<string, Formatter> = {};
+    for (const ext of [".ts", ".tsx", ".js", ".jsx"]) result[ext] = fmt;
+    return result;
+  }
+
+  let jsFormatters: Record<string, Formatter> | null = null;
+
+  function getFormatters(): Record<string, Formatter> {
+    if (!jsFormatters) jsFormatters = detectJsFormatter();
+    return { ...PY_FORMATTERS, ...jsFormatters };
+  }
+
   function formatFile(absPath: string): boolean {
     const ext = extname(absPath).toLowerCase();
-    const formatter = FORMATTERS[ext];
+    const formatter = getFormatters()[ext];
     if (!formatter) return false;
     try {
       execFileSync(formatter.command, formatter.args(absPath), {
@@ -523,20 +560,27 @@ export default function (pi: ExtensionAPI) {
     // Format-on-write
     const formatted = formatFile(absPath);
 
-    const client = await getClient(filePath);
+    const client = await getClient(filePath, true);
     if (!client) return;
 
     await client.notifyChanged(absPath);
     await new Promise((r) => setTimeout(r, 2000));
 
     const errors = client.getErrorDiagnostics(absPath);
-    if (errors.length === 0) return;
-
-    const errorText = errors.map((e) => `  Line ${e.line}: ${e.message}`).join("\n");
     const original = event.content
       .filter((c): c is { type: "text"; text: string } => c.type === "text")
       .map((c) => c.text).join("");
 
+    if (errors.length === 0) {
+      return {
+        content: [{
+          type: "text" as const,
+          text: `${original}\n\n✅ No LSP errors from ${client.name}.`,
+        }],
+      };
+    }
+
+    const errorText = errors.map((e) => `  Line ${e.line}: ${e.message}`).join("\n");
     return {
       content: [{
         type: "text" as const,
@@ -606,13 +650,13 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "get_diagnostics",
     label: "Get Diagnostics",
-    description: "Get type errors, warnings, and diagnostics for a file from the LSP server (pyrefly for Python, tsserver for TypeScript).",
+    description: "Get type errors, warnings, and diagnostics for a file from the LSP server (pyright for Python, tsserver for TypeScript). Note: edit/write tools already report errors automatically — use this only to check files you haven't just modified.",
     parameters: Type.Object({
       path: Type.String({ description: "File path (relative to project root)" }),
     }),
     async execute(_id, params) {
       const filePath = params.path.replace(/^@/, "");
-      const client = await getClient(filePath);
+      const client = await getClient(filePath, true);
       if (!client) return { content: [{ type: "text", text: `No LSP server for ${filePath}.` }], isError: true };
       try {
         const absPath = resolve(projectRoot, filePath);
@@ -676,7 +720,7 @@ export default function (pi: ExtensionAPI) {
 
       if (initPromise) await initPromise;
 
-      const getPyClients = () => clients.filter((c) => c.language === "python" && c.isAlive());
+      const getPyClients = () => clients.filter((c) => c.language === "python" && c.isAlive() && !diagnosticsOnlyClients.has(c));
       if (getPyClients().length === 0) { ctx.ui.notify("No Python LSP running", "warning"); return; }
 
       const result = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
