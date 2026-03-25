@@ -9,7 +9,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { complete } from "@mariozechner/pi-ai";
+import { complete, getModel } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { DynamicBorder } from "@mariozechner/pi-coding-agent";
 import {
@@ -264,9 +264,10 @@ export default function (pi: ExtensionAPI) {
 
 			// 4. generate via isolated LLM call
 			ctx.ui.setStatus("pr", "Generating PR…");
-			const apiKey = await ctx.modelRegistry.getApiKey(ctx.model);
+			const sonnet = getModel("anthropic", "claude-sonnet-4-6");
+			const apiKey = await ctx.modelRegistry.getApiKey(sonnet);
 			const resp = await complete(
-				ctx.model,
+				sonnet,
 				{
 					systemPrompt: SYSTEM,
 					messages: [{

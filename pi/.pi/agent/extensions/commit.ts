@@ -9,7 +9,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { complete } from "@mariozechner/pi-ai";
+import { complete, getModel } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 const SYSTEM = `You analyze git changes and produce a commit plan.
@@ -184,9 +184,10 @@ export default function (pi: ExtensionAPI) {
 
 			// 2. analyze (separate context — diffs never enter main conversation)
 			ctx.ui.setStatus("commit", "Analyzing…");
-			const apiKey = await ctx.modelRegistry.getApiKey(ctx.model);
+			const sonnet = getModel("anthropic", "claude-sonnet-4-6");
+			const apiKey = await ctx.modelRegistry.getApiKey(sonnet);
 			const resp = await complete(
-				ctx.model,
+				sonnet,
 				{
 					systemPrompt: SYSTEM,
 					messages: [
