@@ -83,111 +83,32 @@ function extractText(resp: any): string {
 		.join("");
 }
 
-// --- branch picker UI ---
-
-async function openBranchPicker(ctx: ExtensionContext): Promise<string | null> {
-	const branches = getBranches(ctx.cwd);
-	if (branches.length === 0) {
-		ctx.ui.notify("No remote branches found", "warning");
-		return null;
-	}
-
-	return ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
-		const termRows = tui.terminal.rows || 24;
-		const maxVisible = Math.min(20, Math.max(5, termRows - 8));
-
-		const borderTop = new DynamicBorder((s: string) => theme.fg("accent", s));
-		const borderBottom = new DynamicBorder((s: string) => theme.fg("accent", s));
-		const searchInput = new Input();
-
-		const allItems: SelectItem[] = branches.map((b) => ({ value: b, label: b }));
-		const listTheme = {
-			selectedPrefix: (t: string) => theme.fg("accent", t),
-			selectedText: (t: string) => theme.fg("accent", t),
-			description: (t: string) => theme.fg("muted", t),
-			scrollInfo: (t: string) => theme.fg("dim", t),
-			noMatch: () => theme.fg("warning", "  No matching branches"),
-		};
-
-		let filteredItems: SelectItem[] = allItems;
-		let selectList = new SelectList(filteredItems, maxVisible, listTheme);
-		const applyFilter = (query: string) => {
-			filteredItems = query.trim()
-				? fuzzyFilter(allItems, query.trim(), (item) => item.value)
-				: allItems;
-			selectList = new SelectList(filteredItems, maxVisible, listTheme);
-		};
-
-		let lastQuery = "";
-		let _focused = false;
-
-		const comp: Component & Focusable = {
-			get focused() { return _focused; },
-			set focused(v: boolean) { _focused = v; searchInput.focused = v; },
-
-			render(width: number): string[] {
-				const lines: string[] = [];
-				lines.push(...borderTop.render(width));
-				const query = searchInput.getValue();
-				const matchInfo = query
-					? theme.fg("dim", ` ${filteredItems.length}/${branches.length}`)
-					: theme.fg("dim", ` ${branches.length} branches`);
-				lines.push(" " + theme.fg("accent", theme.bold("🔀 Base Branch")) + matchInfo);
-				lines.push("");
-				for (const line of searchInput.render(width - 2)) lines.push(" " + line);
-				lines.push(theme.fg("dim", " " + "─".repeat(Math.max(1, width - 2))));
-				lines.push(...selectList.render(width));
-				lines.push("");
-				lines.push(
-					" " +
-						theme.fg("dim", "↑↓") + theme.fg("muted", " navigate  ") +
-						theme.fg("dim", "enter") + theme.fg("muted", " select  ") +
-						theme.fg("dim", "esc") + theme.fg("muted", " cancel"),
-				);
-				lines.push(...borderBottom.render(width));
-				return lines;
-			},
-
-			invalidate() {
-				borderTop.invalidate();
-				borderBottom.invalidate();
-				searchInput.invalidate();
-				selectList.invalidate();
-			},
-
-			handleInput(data: string) {
-				if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) { done(null); return; }
-				if (matchesKey(data, Key.enter)) {
-					done(selectList.getSelectedItem()?.value ?? null);
-					return;
-				}
-				if (matchesKey(data, Key.up) || matchesKey(data, Key.down) || matchesKey(data, Key.pageUp) || matchesKey(data, Key.pageDown)) {
-					selectList.handleInput(data);
-					tui.requestRender();
-					return;
-				}
-				searchInput.handleInput(data);
-				const newQuery = searchInput.getValue();
-				if (newQuery !== lastQuery) { applyFilter(newQuery); lastQuery = newQuery; }
-				tui.requestRender();
-			},
-		};
-
-		return comp;
-	}, { overlay: true });
-}
-
 // --- LLM prompt ---
 
 const SYSTEM = `You generate a GitHub PR title and body.
 
 Rules:
-- Title: concise, imperative mood (e.g. "Add retry logic for flaky API calls")
+- Title: imperative mood, under 72 characters, specific about the actual change.
+  - Derive from the diff and commits, not just the branch name.
+  - If there's one clear theme, capture it precisely. If multiple changes, pick the most significant one.
+  - Good: "Add exponential backoff to payment webhook retries"
+  - Good: "Fix race condition in concurrent session cleanup"
+  - Good: "Replace hand-rolled CSV parser with pandas read_csv"
+  - Bad: "Update code", "Fix bug", "Refactor stuff", "Changes" (too vague)
+  - Bad: "Add exponential backoff to payment webhook retries to fix flaky API calls that were causing issues in production" (too long)
+  - Do NOT use conventional commit prefixes (feat:, fix:, chore:, …). Just write a plain descriptive title.
 - Body: fill in the PR template sections if provided. If no template, use: ## Summary, ## Changes, ## Why
 - For every change, prioritize explaining WHY over what. The diff already shows what changed.
 - If session context contains decision-making (why an approach was chosen, alternatives considered), include that.
 - Session context and conversation history are hints about intent — if they conflict with the diff, trust the diff.
 - Do not invent changes not present in the diff.
+- Describe the problem or fix itself, not who reported it. Never reference reviewers or tools (e.g. "coderabbit", "reviewer pointed out"). Instead of "Fix issue raised by coderabbit", write "Fix null check on empty input".
+- Always use "- " (dash) for bullet points. Never use "* " or other bullet styles. Even when a section has only one item, use "- " — never write bare prose lines.
+- When the diff involves non-trivial architectural changes, add a Mermaid diagram in the body to help reviewers.
+  Good use cases: new component/module relationships, changed data flow or state transitions, request/response sequences, before/after architecture comparison.
+  Bad use cases: simple bug fixes, config changes, renaming, single-file tweaks. Do NOT force a diagram when it adds no value.
+  Use the simplest diagram type that fits: flowchart (dependency/flow), sequenceDiagram (interactions), stateDiagram-v2 (state machines), graph TD (hierarchies).
+  Keep diagrams compact (under ~15 nodes). Wrap in a \`\`\`mermaid fenced code block.
 
 Output ONLY valid JSON — no markdown fences, no explanation:
 {
