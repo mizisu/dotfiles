@@ -265,7 +265,12 @@ export default function (pi: ExtensionAPI) {
 			// 4. generate via isolated LLM call
 			ctx.ui.setStatus("pr", "Generating PR…");
 			const sonnet = getModel("anthropic", "claude-sonnet-4-6");
-			const apiKey = await ctx.modelRegistry.getApiKey(sonnet);
+			const auth = await ctx.modelRegistry.getApiKeyAndHeaders(sonnet);
+			if (!auth.ok) {
+				ctx.ui.setStatus("pr", undefined);
+				ctx.ui.notify(`Auth error: ${auth.error}`, "error");
+				return;
+			}
 			const resp = await complete(
 				sonnet,
 				{
@@ -285,7 +290,7 @@ export default function (pi: ExtensionAPI) {
 						timestamp: Date.now(),
 					}],
 				},
-				{ apiKey },
+				{ apiKey: auth.apiKey, headers: auth.headers },
 			);
 			ctx.ui.setStatus("pr", undefined);
 

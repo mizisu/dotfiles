@@ -97,38 +97,156 @@ export default function (pi: ExtensionAPI) {
 		uiRef.setWidget("btw", [`/btw ${parts.join("  ")} — /btw to review`]);
 	}
 
-	function fireQuestion(thread: BtwThread, model: any, modelRegistry: any) {
+	async function executeToolCalls(
+		toolCalls: ToolCall[],
+		cwd: string,
+		signal: AbortSignal,
+	): Promise<ToolResultMessage[]> {
+		const results: ToolResultMessage[] = [];
+		for (const tc of toolCalls) {
+			if (signal.aborted) break;
+			try {
+				let text: string;
+				if (tc.name === "read") {
+					const {
+						path: filePath,
+						offset,
+						limit,
+					} = tc.arguments as { path: string; offset?: number; limit?: number };
+					const resolved = filePath.startsWith("/")
+						? filePath
+						: `${cwd}/${filePath}`;
+					let content = await readFile(resolved, "utf8");
+					if (offset || limit) {
+						const lines = content.split("\n");
+						const start = Math.max(0, (offset ?? 1) - 1);
+						const end = limit ? start + limit : lines.length;
+						content = lines.slice(start, end).join("\n");
+					}
+					text = truncateOutput(content, MAX_OUTPUT_BYTES);
+				} else if (tc.name === "bash") {
+					const { command, timeout } = tc.arguments as {
+						command: string;
+						timeout?: number;
+					};
+					const result = await pi.exec("bash", ["-c", command], {
+						signal,
+						timeout: (timeout ?? 15) * 1000,
+					});
+					const output = [result.stdout, result.stderr]
+						.filter(Boolean)
+						.join("\n");
+					text = truncateOutput(output || "(no output)", MAX_OUTPUT_BYTES);
+					if (result.code !== 0) text += `\n[exit code: ${result.code}]`;
+				} else {
+					text = `Unknown tool: ${tc.name}`;
+				}
+				results.push({
+					role: "toolResult",
+					toolCallId: tc.id,
+					toolName: tc.name,
+					content: [{ type: "text", text }],
+					isError: false,
+					timestamp: Date.now(),
+				});
+			} catch (e: any) {
+				results.push({
+					role: "toolResult",
+					toolCallId: tc.id,
+					toolName: tc.name,
+					content: [{ type: "text", text: e?.message ?? String(e) }],
+					isError: true,
+					timestamp: Date.now(),
+				});
+			}
+		}
+		return results;
+	}
+
+	function fireQuestion(
+		thread: BtwThread,
+		model: any,
+		modelRegistry: any,
+		cwd: string,
+	) {
 		const userMsg: UserMessage = {
 			role: "user",
 			content: [{ type: "text", text: thread.latestQuestion }],
 			timestamp: Date.now(),
 		};
-		const allMessages = [...thread.baseMessages, ...thread.messages, userMsg];
 		thread.abort = new AbortController();
 		thread.status = "pending";
 		updateWidget();
 
 		(async () => {
 			try {
-				const apiKey = await modelRegistry.getApiKey(model);
-				const response = await complete(
-					model,
-					{ systemPrompt: SYSTEM_PROMPT, messages: allMessages },
-					{ apiKey, signal: thread.abort.signal },
-				);
-				if (response.stopReason === "aborted") {
-					const i = threads.indexOf(thread);
-					if (i >= 0) threads.splice(i, 1);
-				} else if (response.stopReason === "error") {
-					thread.error = response.errorMessage ?? "Unknown error";
-					thread.status = "error";
-				} else {
+				const auth = await modelRegistry.getApiKeyAndHeaders(model);
+				if (!auth.ok) throw new Error(auth.error);
+				const signal = thread.abort!.signal;
+				const loopMessages: Message[] = [
+					...thread.baseMessages,
+					...thread.messages,
+					userMsg,
+				];
+
+				for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
+					if (signal.aborted) break;
+
+					const response = await complete(
+						model,
+						{
+							systemPrompt: SYSTEM_PROMPT,
+							messages: loopMessages,
+							tools: BTW_TOOLS,
+						},
+						{ apiKey: auth.apiKey, headers: auth.headers, signal },
+					);
+
+					if (response.stopReason === "aborted") {
+						const i = threads.indexOf(thread);
+						if (i >= 0) threads.splice(i, 1);
+						updateWidget();
+						return;
+					}
+					if (response.stopReason === "error") {
+						thread.error = response.errorMessage ?? "Unknown error";
+						thread.status = "error";
+						updateWidget();
+						return;
+					}
+
+					loopMessages.push(response as Message);
+
+					if (response.stopReason === "toolUse") {
+						const toolCalls = response.content.filter(
+							(c): c is ToolCall => c.type === "toolCall",
+						);
+						const toolResults = await executeToolCalls(toolCalls, cwd, signal);
+						loopMessages.push(...toolResults);
+						continue;
+					}
+
+					// stopReason === "stop" or "length" → done
 					const answer = extractText(response);
 					thread.latestAnswer = answer || "(empty response)";
 					thread.messages.push(userMsg);
+					// Store only the user msg + final assistant response (skip intermediate tool turns)
 					thread.messages.push(response as Message);
 					thread.status = "done";
+					updateWidget();
+					return;
 				}
+
+				// Exhausted max turns
+				const lastAssistant = loopMessages
+					.filter((m) => m.role === "assistant")
+					.pop();
+				thread.latestAnswer = lastAssistant
+					? extractText(lastAssistant as any)
+					: "(max tool turns reached)";
+				thread.messages.push(userMsg);
+				if (lastAssistant) thread.messages.push(lastAssistant);
+				thread.status = "done";
 			} catch (e: any) {
 				thread.error = e?.message ?? String(e);
 				thread.status = "error";

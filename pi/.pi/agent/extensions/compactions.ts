@@ -11,9 +11,9 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		const apiKey = await ctx.modelRegistry.getApiKey(model);
-		if (!apiKey) {
-			ctx.ui.notify("No API key for Anthropic, falling back to default compaction", "warning");
+		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+		if (!auth.ok) {
+			ctx.ui.notify(`Auth error for Anthropic: ${auth.error}, falling back to default compaction`, "warning");
 			return;
 		}
 
@@ -23,7 +23,7 @@ export default function (pi: ExtensionAPI) {
 		);
 
 		try {
-			const result = await compact(preparation, model, apiKey, customInstructions, signal);
+			const result = await compact(preparation, model, auth.apiKey ?? "", auth.headers, customInstructions, signal);
 
 			ctx.ui.notify("Compaction complete (anthropic/claude-sonnet-4-6)", "info");
 

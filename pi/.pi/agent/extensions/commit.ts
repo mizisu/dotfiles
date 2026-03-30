@@ -185,7 +185,12 @@ export default function (pi: ExtensionAPI) {
 			// 2. analyze (separate context — diffs never enter main conversation)
 			ctx.ui.setStatus("commit", "Analyzing…");
 			const sonnet = getModel("anthropic", "claude-sonnet-4-6");
-			const apiKey = await ctx.modelRegistry.getApiKey(sonnet);
+			const auth = await ctx.modelRegistry.getApiKeyAndHeaders(sonnet);
+			if (!auth.ok) {
+				ctx.ui.setStatus("commit", undefined);
+				ctx.ui.notify(`Auth error: ${auth.error}`, "error");
+				return;
+			}
 			const resp = await complete(
 				sonnet,
 				{
@@ -211,7 +216,7 @@ export default function (pi: ExtensionAPI) {
 						},
 					],
 				},
-				{ apiKey },
+				{ apiKey: auth.apiKey, headers: auth.headers },
 			);
 			ctx.ui.setStatus("commit", undefined);
 
