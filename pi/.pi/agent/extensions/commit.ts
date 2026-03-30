@@ -401,7 +401,8 @@ export default function (pi: ExtensionAPI) {
 			if (completedCommits.length > 0 && !fixError) {
 				if (await ctx.ui.confirm("Push", "Push to remote?")) {
 					ctx.ui.setStatus("commit", "Pushing…");
-					const pushRes = await pi.exec("git", ["push"]);
+					const branch = (await pi.exec("git", ["rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim();
+					const pushRes = await pi.exec("git", ["push", "-u", "origin", branch]);
 					ctx.ui.setStatus("commit", undefined);
 					if (pushRes.code === 0) {
 						ctx.ui.notify("Pushed successfully", "info");
