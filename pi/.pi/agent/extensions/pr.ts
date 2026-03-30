@@ -10,36 +10,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { complete, getModel } from "@mariozechner/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { DynamicBorder } from "@mariozechner/pi-coding-agent";
-import {
-	Input,
-	SelectList,
-	fuzzyFilter,
-	matchesKey,
-	Key,
-	type SelectItem,
-	type Component,
-	type Focusable,
-} from "@mariozechner/pi-tui";
-import { spawnSync } from "node:child_process";
-
-// --- git helpers ---
-
-function getBranches(cwd: string): string[] {
-	const result = spawnSync("git", ["branch", "-r", "--sort=-committerdate", "--format=%(refname:short)"], {
-		cwd,
-		encoding: "utf-8",
-		timeout: 5000,
-	});
-	if (result.status !== 0 || !result.stdout) return [];
-	return result.stdout
-		.trim()
-		.split("\n")
-		.filter(Boolean)
-		.map((b) => b.replace(/^origin\//, ""))
-		.filter((b) => b !== "HEAD");
-}
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { openBaseBranchPicker } from "./shared/branch-picker.js";
 
 function findPrTemplate(cwd: string): string | undefined {
 	const candidates = [
@@ -232,7 +204,7 @@ export default function (pi: ExtensionAPI) {
 			if (!ctx.model) { ctx.ui.notify("No model selected", "error"); return; }
 
 			// 1. pick base branch
-			const base = await openBranchPicker(ctx);
+			const base = await openBaseBranchPicker(ctx);
 			if (!base) return;
 
 			// 2. check state
