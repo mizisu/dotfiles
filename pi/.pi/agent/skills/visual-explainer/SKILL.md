@@ -26,7 +26,6 @@ Detailed prompt templates in `./commands/`. In Pi, these are slash commands (`/d
 | `generate-slides` | Generate a magazine-quality slide deck |
 | `diff-review` | Visual diff review with architecture comparison and code review |
 | `plan-review` | Compare a plan against the codebase with risk assessment |
-| `project-recap` | Mental model snapshot for context-switching back to a project |
 | `fact-check` | Verify accuracy of a document against actual code |
 | `share` | Deploy an HTML page to Vercel and get a live URL |
 

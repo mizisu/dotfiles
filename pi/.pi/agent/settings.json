@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "0.62.0",
+  "lastChangelogVersion": "0.64.0",
   "defaultProvider": "anthropic",
   "defaultModel": "claude-opus-4-6",
   "theme": "catppuccin-macchiato",
@@ -14,9 +14,6 @@
     "showImages": true
   },
   "showHardwareCursor": true,
-  "contextFiles": {
-    "enabled": true
-  },
   "doubleEscapeAction": "tree",
   "packages": [
     "git:github.com/pasky/chrome-cdp-skill@v1.0.1"
