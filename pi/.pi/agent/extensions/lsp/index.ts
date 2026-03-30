@@ -291,16 +291,23 @@ export default function (pi: ExtensionAPI) {
     })();
   }
 
-  async function shutdownServers() {
-    await Promise.allSettled(clients.map((c) => c.shutdown()));
+  function forceShutdownServers() {
+    for (const client of clients) client.terminate();
     clients = [];
     diagnosticsOnlyClients.clear();
     initPromise = null;
     if (currentCtx) updateStatus(currentCtx);
   }
 
+  async function shutdownServers() {
+    await Promise.allSettled(clients.map((c) => c.shutdown()));
+    forceShutdownServers();
+  }
+
   async function restartServers(reason: string) {
+    if (!projectRoot) return;
     await shutdownServers();
+    if (!projectRoot) return;
     startServers(projectRoot);
     if (initPromise) await initPromise;
     if (currentCtx?.hasUI) currentCtx.ui.notify(`LSP restarted (${reason})`, "info");
@@ -441,6 +448,7 @@ export default function (pi: ExtensionAPI) {
             scheduleGitHeadSync("fs-watch");
           }
         });
+        gitHeadWatcher.unref?.();
       } catch {
         gitHeadWatcher = null;
       }
@@ -449,6 +457,7 @@ export default function (pi: ExtensionAPI) {
     gitHeadPollTimer = setInterval(() => {
       scheduleGitHeadSync("poll");
     }, GIT_HEAD_POLL_MS);
+    gitHeadPollTimer.unref?.();
   }
 
   // ── Lifecycle ──────────────────────────────────────────────
@@ -491,9 +500,10 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  pi.on("session_shutdown", async () => {
+  pi.on("session_shutdown", () => {
     stopGitHeadTracking();
-    await shutdownServers();
+    projectRoot = "";
+    forceShutdownServers();
     currentCtx = null;
     lastGitHead = null;
     reindexing = false;

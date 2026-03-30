@@ -112,6 +112,13 @@ export class LSPClient {
       env: { ...process.env, ...env },
     });
 
+    this.process.unref();
+    for (const stream of [this.process.stdin, this.process.stdout, this.process.stderr]) {
+      if (stream && typeof (stream as any).unref === "function") {
+        (stream as any).unref();
+      }
+    }
+
     // Swallow write-after-destroy errors on stdin
     this.process.stdin?.on("error", () => {});
     this.process.stdout?.on("error", () => {});
@@ -460,26 +467,43 @@ export class LSPClient {
     return this.getDiagnostics(filePath).filter((d) => d.severity === "error");
   }
 
+  private terminateProcess(): void {
+    try { this.connection.end(); } catch {}
+    try { this.connection.dispose(); } catch {}
+    try { this.process.stdin?.destroy(); } catch {}
+    try { this.process.stdout?.destroy(); } catch {}
+    try { this.process.stderr?.destroy(); } catch {}
+    try { this.process.kill(); } catch {}
+  }
+
+  terminate(): void {
+    this.dead = true;
+    this.ready = false;
+    this.terminateProcess();
+  }
+
   async shutdown(): Promise<void> {
-    if (this.dead) return;
+    if (this.dead) {
+      this.terminateProcess();
+      return;
+    }
+
     this.dead = true;
     this.ready = false;
     try {
-      // Send shutdown request, then exit notification, before killing
       await Promise.race([
         this.connection.sendRequest("shutdown").then(() => {
           return this.connection.sendNotification("exit").catch(() => {});
         }),
-        new Promise<void>((r) => setTimeout(r, 3000)),
+        new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 3000);
+          timer.unref?.();
+        }),
       ]);
     } catch {
       // already dead
     }
-    // Dispose connection first, then kill process
-    try { this.connection.end(); } catch {}
-    try { this.connection.dispose(); } catch {}
-    // Destroy stdin to prevent further writes before killing
-    try { this.process.stdin?.destroy(); } catch {}
-    try { this.process.kill(); } catch {}
+
+    this.terminateProcess();
   }
 }
