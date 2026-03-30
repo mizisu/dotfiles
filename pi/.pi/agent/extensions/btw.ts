@@ -5,9 +5,12 @@
  * simultaneously in the background. Results are shown in a widget and reviewed
  * via /btw (no args).
  *
+ * Supports tool use (read files, run bash commands) for code exploration.
+ *
  * Usage:
  *   /btw what was the name of that config file?   — fire question
  *   /btw how does the auth flow work?              — another one
+ *   /btw explore the review module and summarize   — uses tools
  *   /btw                                           — review results
  *
  * Review:
@@ -18,18 +21,78 @@
  *   Esc    close review
  */
 
-import { complete, type Message, type UserMessage } from "@mariozechner/pi-ai";
+import {
+	complete,
+	type Message,
+	type Tool,
+	type ToolCall,
+	type ToolResultMessage,
+	type UserMessage,
+} from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { DynamicBorder, getMarkdownTheme } from "@mariozechner/pi-coding-agent";
-import { Container, Input, Markdown, matchesKey, Text } from "@mariozechner/pi-tui";
+import { Type } from "@sinclair/typebox";
+import { readFile } from "node:fs/promises";
+import {
+	Container,
+	Input,
+	Markdown,
+	matchesKey,
+	Text,
+} from "@mariozechner/pi-tui";
 
-const SYSTEM_PROMPT = `You are answering a quick side question about an ongoing coding session.
+const MAX_TOOL_TURNS = 15;
+const MAX_OUTPUT_BYTES = 30_000;
 
-You have full visibility into the conversation so far. Answer concisely and directly.
-If the answer is in the conversation context, reference it specifically.
-If you genuinely don't know, say so briefly.
+const SYSTEM_PROMPT = `You are answering a side question about an ongoing coding session.
 
-Keep your response short — this is a quick reference, not a deep dive.`;
+You have full visibility into the conversation so far, and you can use tools to read files and run commands.
+Answer concisely and directly. Use tools when the answer requires looking at code or running commands.
+If the answer is already in the conversation context, reference it directly without re-reading files.
+
+Keep your final response focused and well-organized.`;
+
+const BTW_TOOLS: Tool[] = [
+	{
+		name: "read",
+		description: "Read contents of a file. Use offset/limit for large files.",
+		parameters: Type.Object({
+			path: Type.String({ description: "File path to read" }),
+			offset: Type.Optional(
+				Type.Number({ description: "Line number to start from (1-indexed)" }),
+			),
+			limit: Type.Optional(Type.Number({ description: "Max lines to read" })),
+		}),
+	},
+	{
+		name: "bash",
+		description:
+			"Run a bash command. Use for searching code (rg, find), listing files (ls), etc.",
+		parameters: Type.Object({
+			command: Type.String({ description: "Bash command to execute" }),
+			timeout: Type.Optional(
+				Type.Number({ description: "Timeout in seconds (default 15)" }),
+			),
+		}),
+	},
+];
+
+function truncateOutput(text: string, maxBytes: number): string {
+	if (Buffer.byteLength(text) <= maxBytes) return text;
+	const lines = text.split("\n");
+	let size = 0;
+	let kept = 0;
+	for (const line of lines) {
+		const lineSize = Buffer.byteLength(line) + 1;
+		if (size + lineSize > maxBytes) break;
+		size += lineSize;
+		kept++;
+	}
+	return (
+		lines.slice(0, Math.max(kept, 1)).join("\n") +
+		`\n\n[truncated — showing ${kept}/${lines.length} lines]`
+	);
+}
 
 interface BtwThread {
 	id: number;
@@ -48,21 +111,33 @@ function buildMessages(branch: any[]): Message[] {
 		if (entry.type !== "message") continue;
 		const msg = entry.message;
 		if (!msg || !("role" in msg)) continue;
-		if (msg.role === "user" || msg.role === "assistant" || msg.role === "toolResult") {
+		if (
+			msg.role === "user" ||
+			msg.role === "assistant" ||
+			msg.role === "toolResult"
+		) {
 			messages.push(msg);
 		}
 	}
 	return messages;
 }
 
-function extractText(response: { content: { type: string; text?: string; thinking?: string }[] }): string {
+function extractText(response: {
+	content: { type: string; text?: string; thinking?: string }[];
+}): string {
 	const textParts = response.content
-		.filter((c): c is { type: "text"; text: string } => c.type === "text" && typeof c.text === "string")
+		.filter(
+			(c): c is { type: "text"; text: string } =>
+				c.type === "text" && typeof c.text === "string",
+		)
 		.map((c) => c.text);
 	if (textParts.length > 0) return textParts.join("\n");
 	// Fallback: extract thinking content if no text blocks
 	const thinkingParts = response.content
-		.filter((c): c is { type: "thinking"; thinking: string } => c.type === "thinking" && typeof c.thinking === "string")
+		.filter(
+			(c): c is { type: "thinking"; thinking: string } =>
+				c.type === "thinking" && typeof c.thinking === "string",
+		)
 		.map((c) => c.thinking);
 	if (thinkingParts.length > 0) return thinkingParts.join("\n");
 	return "";
@@ -286,17 +361,25 @@ export default function (pi: ExtensionAPI) {
 				latestQuestion: args.trim(),
 			};
 			threads.push(thread);
-			fireQuestion(thread, ctx.model, ctx.modelRegistry);
+			fireQuestion(thread, ctx.model, ctx.modelRegistry, ctx.cwd);
 		},
 	});
 
 	// --- Review logic (/btw with no args) ---
 
-	async function openReview(ctx: { ui: any; model?: any; modelRegistry?: any }) {
+	async function openReview(ctx: {
+		ui: any;
+		model?: any;
+		modelRegistry?: any;
+		cwd: string;
+	}) {
 		const ready = threads.filter((t) => t.status !== "pending");
 		if (ready.length === 0) {
 			const pending = threads.filter((t) => t.status === "pending").length;
-			ctx.ui.notify(pending > 0 ? `${pending} btw still thinking…` : "No btw results", "info");
+			ctx.ui.notify(
+				pending > 0 ? `${pending} btw still thinking…` : "No btw results",
+				"info",
+			);
 			return;
 		}
 
@@ -315,17 +398,22 @@ export default function (pi: ExtensionAPI) {
 					if (idx >= items.length) idx = items.length - 1;
 
 					const item = items[idx];
-					const border = new DynamicBorder((s: string) => theme.fg("accent", s));
+					const border = new DynamicBorder((s: string) =>
+						theme.fg("accent", s),
+					);
 
 					container.addChild(border);
 
 					// Header
-					const counter = items.length > 1 ? `  ${idx + 1}/${items.length}` : "";
+					const counter =
+						items.length > 1 ? `  ${idx + 1}/${items.length}` : "";
 					const turns = item.messages.length / 2;
 					const turnInfo = turns > 1 ? `  (${turns} turns)` : "";
 					container.addChild(
 						new Text(
-							" " + theme.fg("accent", theme.bold("/btw")) + theme.fg("dim", counter + turnInfo),
+							" " +
+								theme.fg("accent", theme.bold("/btw")) +
+								theme.fg("dim", counter + turnInfo),
 							1,
 							0,
 						),
@@ -333,18 +421,27 @@ export default function (pi: ExtensionAPI) {
 
 					// Body
 					if (item.status === "error") {
-						container.addChild(new Text(" " + theme.fg("error", `Error: ${item.error}`), 1, 0));
+						container.addChild(
+							new Text(" " + theme.fg("error", `Error: ${item.error}`), 1, 0),
+						);
 					} else {
 						for (let i = 0; i < item.messages.length; i += 2) {
 							if (i > 0) container.addChild(new Text("", 0, 0));
 							container.addChild(
-								new Text(" " + theme.fg("dim", "Q: " + getTextContent(item.messages[i])), 1, 0),
+								new Text(
+									" " +
+										theme.fg("dim", "Q: " + getTextContent(item.messages[i])),
+									1,
+									0,
+								),
 							);
 							const answerText = extractText(item.messages[i + 1] as any);
 							if (answerText.trim()) {
 								container.addChild(new Markdown(answerText, 1, 1, mdTheme));
 							} else {
-								container.addChild(new Text(" " + theme.fg("warning", "(no answer text)"), 1, 0));
+								container.addChild(
+									new Text(" " + theme.fg("warning", "(no answer text)"), 1, 0),
+								);
 							}
 						}
 					}
@@ -354,7 +451,8 @@ export default function (pi: ExtensionAPI) {
 					if (items.length > 1) hints.push(theme.fg("dim", "↑↓") + " navigate");
 					hints.push(theme.fg("dim", "enter") + " keep");
 					hints.push(theme.fg("dim", "d") + " dismiss");
-					if (item.status === "done") hints.push(theme.fg("dim", "tab") + " follow-up");
+					if (item.status === "done")
+						hints.push(theme.fg("dim", "tab") + " follow-up");
 					hints.push(theme.fg("dim", "esc") + " close");
 					container.addChild(new Text(" " + hints.join("  "), 1, 0));
 					container.addChild(border);
@@ -397,7 +495,8 @@ export default function (pi: ExtensionAPI) {
 							if (ti >= 0) threads.splice(ti, 1);
 							updateWidget();
 							rebuild();
-							if (threads.filter((t) => t.status !== "pending").length === 0) done(undefined);
+							if (threads.filter((t) => t.status !== "pending").length === 0)
+								done(undefined);
 							else tui.requestRender();
 						} else if (matchesKey(data, "d")) {
 							// Dismiss
@@ -405,7 +504,8 @@ export default function (pi: ExtensionAPI) {
 							if (ti >= 0) threads.splice(ti, 1);
 							updateWidget();
 							rebuild();
-							if (threads.filter((t) => t.status !== "pending").length === 0) done(undefined);
+							if (threads.filter((t) => t.status !== "pending").length === 0)
+								done(undefined);
 							else tui.requestRender();
 						} else if (matchesKey(data, "tab") && item.status === "done") {
 							followUpThread = item;
@@ -428,34 +528,48 @@ export default function (pi: ExtensionAPI) {
 		// Follow-up: show input, fire new question on same thread
 		if (followUpThread && ctx.model) {
 			const thread = followUpThread;
-			const newQuestion = await ctx.ui.custom<string | null>((_tui: any, theme: any, _kb: any, done: (r: string | null) => void) => {
-				const container = new Container();
-				const border = new DynamicBorder((s: string) => theme.fg("accent", s));
-				const input = new Input();
-				input.focused = true;
-				input.onSubmit = (v: string) => {
-					if (v.trim()) done(v.trim());
-				};
-				input.onEscape = () => done(null);
+			const newQuestion = await ctx.ui.custom<string | null>(
+				(_tui: any, theme: any, _kb: any, done: (r: string | null) => void) => {
+					const container = new Container();
+					const border = new DynamicBorder((s: string) =>
+						theme.fg("accent", s),
+					);
+					const input = new Input();
+					input.focused = true;
+					input.onSubmit = (v: string) => {
+						if (v.trim()) done(v.trim());
+					};
+					input.onEscape = () => done(null);
 
-				container.addChild(border);
-				container.addChild(new Text(" " + theme.fg("accent", "Follow-up question:"), 1, 0));
-				container.addChild(input);
-				container.addChild(
-					new Text(" " + theme.fg("dim", "enter") + " submit  " + theme.fg("dim", "esc") + " cancel", 1, 0),
-				);
-				container.addChild(border);
+					container.addChild(border);
+					container.addChild(
+						new Text(" " + theme.fg("accent", "Follow-up question:"), 1, 0),
+					);
+					container.addChild(input);
+					container.addChild(
+						new Text(
+							" " +
+								theme.fg("dim", "enter") +
+								" submit  " +
+								theme.fg("dim", "esc") +
+								" cancel",
+							1,
+							0,
+						),
+					);
+					container.addChild(border);
 
-				return {
-					render: (w: number) => container.render(w),
-					invalidate: () => container.invalidate(),
-					handleInput: (data: string) => input.handleInput(data),
-				};
-			});
+					return {
+						render: (w: number) => container.render(w),
+						invalidate: () => container.invalidate(),
+						handleInput: (data: string) => input.handleInput(data),
+					};
+				},
+			);
 
 			if (newQuestion) {
 				thread.latestQuestion = newQuestion;
-				fireQuestion(thread, ctx.model, ctx.modelRegistry);
+				fireQuestion(thread, ctx.model, ctx.modelRegistry, ctx.cwd);
 			}
 		}
 	}
