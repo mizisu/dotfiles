@@ -614,6 +614,7 @@ export default function (pi: ExtensionAPI) {
     name: "goto_definition",
     label: "Go to Definition",
     description: "Find the definition of a symbol at a given file position. Returns file path and line number where the symbol is defined. Line is 1-based, character is 0-based.",
+    promptSnippet: "Find the definition of a symbol at a given file position. Returns file path and line number where the symbol is defined. Line is 1-based, character is 0-based.",
     parameters: Type.Object({
       path: Type.String({ description: "File path (relative to project root)" }),
       line: Type.Number({ description: "Line number (1-based)" }),
@@ -645,6 +646,7 @@ export default function (pi: ExtensionAPI) {
     name: "find_references",
     label: "Find References",
     description: "Find all references to a symbol at a given file position. Use before renaming or refactoring. Line is 1-based, character is 0-based.",
+    promptSnippet: "Find all references to a symbol at a given file position. Use before renaming or refactoring. Line is 1-based, character is 0-based.",
     parameters: Type.Object({
       path: Type.String({ description: "File path (relative to project root)" }),
       line: Type.Number({ description: "Line number (1-based)" }),
@@ -670,6 +672,7 @@ export default function (pi: ExtensionAPI) {
     name: "get_diagnostics",
     label: "Get Diagnostics",
     description: "Get type errors, warnings, and diagnostics for a file from the LSP server (pyright for Python, tsserver for TypeScript). Note: edit/write tools already report errors automatically — use this only to check files you haven't just modified.",
+    promptSnippet: "Get type errors, warnings, and diagnostics for a file from the LSP server (pyright for Python, tsserver for TypeScript). Note: edit/write tools already report errors automatically — use this only to check files you haven't just modified.",
     parameters: Type.Object({
       path: Type.String({ description: "File path (relative to project root)" }),
     }),
@@ -695,6 +698,7 @@ export default function (pi: ExtensionAPI) {
     name: "hover_info",
     label: "Hover Info",
     description: "Get type information and documentation for a symbol at a given position. Useful for checking function signatures and types.",
+    promptSnippet: "Get type information and documentation for a symbol at a given position. Useful for checking function signatures and types.",
     parameters: Type.Object({
       path: Type.String({ description: "File path (relative to project root)" }),
       line: Type.Number({ description: "Line number (1-based)" }),

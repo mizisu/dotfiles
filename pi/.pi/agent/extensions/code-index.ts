@@ -118,6 +118,8 @@ export default function (pi: ExtensionAPI) {
 		label: "Search Symbols",
 		description:
 			"Search project symbols (functions, classes, types, methods) by name. Returns compact list of name, kind, file:line. Use BEFORE reading files to locate code quickly.",
+		promptSnippet:
+			"Search project symbols (functions, classes, types, methods) by name. Returns compact list of name, kind, file:line. Use BEFORE reading files to locate code quickly.",
 		parameters: Type.Object({
 			query: Type.String({ description: "Symbol name (case-insensitive, partial match)" }),
 			kind: Type.Optional(
@@ -194,6 +196,8 @@ export default function (pi: ExtensionAPI) {
 		name: "project_map",
 		label: "Project Map",
 		description:
+			"Show directory structure with symbols (functions, classes, types, methods). Returns a compact file→symbol tree. Use to understand project layout without reading files.",
+		promptSnippet:
 			"Show directory structure with symbols (functions, classes, types, methods). Returns a compact file→symbol tree. Use to understand project layout without reading files.",
 		parameters: Type.Object({
 			path: Type.Optional(Type.String({ description: "Directory to map (default: project root)" })),

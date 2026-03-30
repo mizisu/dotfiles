@@ -159,6 +159,8 @@ export default function (pi: ExtensionAPI) {
       "Use this FIRST to locate relevant code before reading full files.",
       "Results include file paths and line numbers — pass them to the read tool.",
     ].join("\n"),
+    promptSnippet:
+      "Semantic code search across the codebase using vector embeddings (CodeRankEmbed).\nReturns the most relevant code chunks matching a natural language query.\nUse this FIRST to locate relevant code before reading full files.\nResults include file paths and line numbers — pass them to the read tool.",
     parameters: Type.Object({
       query: Type.String({ description: "Natural language description of the code to find" }),
       top_k: Type.Optional(Type.Number({ description: "Number of results (default 10, max 30)" })),

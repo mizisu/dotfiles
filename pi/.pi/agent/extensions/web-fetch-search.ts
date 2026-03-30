@@ -356,6 +356,11 @@ Converts HTML pages to Markdown via Jina Reader (no API key needed).
 Handles HTML, JSON, plain text, XML/RSS feeds.
 Use raw=true to get untransformed HTML.
 Output is truncated to ${FETCH_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)}.`,
+		promptSnippet: `Fetch a URL and return its content in clean, readable Markdown format.
+Converts HTML pages to Markdown via Jina Reader (no API key needed).
+Handles HTML, JSON, plain text, XML/RSS feeds.
+Use raw=true to get untransformed HTML.
+Output is truncated to ${FETCH_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)}.`,
 		parameters: Type.Object({
 			url: Type.String({ description: "URL to fetch" }),
 			raw: Type.Optional(Type.Boolean({ description: "Return raw content without HTML→Markdown (default: false)" })),
@@ -480,6 +485,9 @@ Output is truncated to ${FETCH_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTE
 		name: "web_search",
 		label: "Web Search",
 		description: `Search the web for up-to-date information. Works WITHOUT any API key using DuckDuckGo.
+Optional: set BRAVE_API_KEY or JINA_API_KEY for higher quality results (auto-selected when available).
+Always include source links when citing search results.`,
+		promptSnippet: `Search the web for up-to-date information. Works WITHOUT any API key using DuckDuckGo.
 Optional: set BRAVE_API_KEY or JINA_API_KEY for higher quality results (auto-selected when available).
 Always include source links when citing search results.`,
 		parameters: Type.Object({
