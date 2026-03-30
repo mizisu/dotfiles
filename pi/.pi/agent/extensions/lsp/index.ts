@@ -513,12 +513,18 @@ export default function (pi: ExtensionAPI) {
 
   type Formatter = { command: string; args: (file: string) => string[] };
 
-  const PY_FORMATTERS: Record<string, Formatter> = {
-    ".py": { command: "uvx", args: (f) => ["ruff", "format", f] },
-    ".pyi": { command: "uvx", args: (f) => ["ruff", "format", f] },
+  const PY_FORMATTERS: Record<string, Formatter[]> = {
+    ".py": [
+      { command: "uvx", args: (f) => ["ruff", "check", "--fix", f] },
+      { command: "uvx", args: (f) => ["ruff", "format", f] },
+    ],
+    ".pyi": [
+      { command: "uvx", args: (f) => ["ruff", "check", "--fix", f] },
+      { command: "uvx", args: (f) => ["ruff", "format", f] },
+    ],
   };
 
-  function detectJsFormatter(): Record<string, Formatter> {
+  function detectJsFormatter(): Record<string, Formatter[]> {
     if (!projectRoot) return {};
     const biomeNames = ["biome.json", "biome.jsonc"];
     const prettierNames = [".prettierrc", ".prettierrc.json", ".prettierrc.js", ".prettierrc.cjs", ".prettierrc.mjs", ".prettierrc.yml", ".prettierrc.yaml", ".prettierrc.toml", "prettier.config.js", "prettier.config.cjs", "prettier.config.mjs"];
@@ -530,31 +536,34 @@ export default function (pi: ExtensionAPI) {
     else if (hasPrettier) fmt = { command: "npx", args: (f) => ["prettier", "--write", f] };
 
     if (!fmt) return {};
-    const result: Record<string, Formatter> = {};
-    for (const ext of [".ts", ".tsx", ".js", ".jsx"]) result[ext] = fmt;
+    const result: Record<string, Formatter[]> = {};
+    for (const ext of [".ts", ".tsx", ".js", ".jsx"]) result[ext] = [fmt];
     return result;
   }
 
-  let jsFormatters: Record<string, Formatter> | null = null;
+  let jsFormatters: Record<string, Formatter[]> | null = null;
 
-  function getFormatters(): Record<string, Formatter> {
+  function getFormatters(): Record<string, Formatter[]> {
     if (!jsFormatters) jsFormatters = detectJsFormatter();
     return { ...PY_FORMATTERS, ...jsFormatters };
   }
 
   function formatFile(absPath: string): boolean {
     const ext = extname(absPath).toLowerCase();
-    const formatter = getFormatters()[ext];
-    if (!formatter) return false;
-    try {
-      execFileSync(formatter.command, formatter.args(absPath), {
-        timeout: 10000,
-        stdio: "pipe",
-      });
-      return true;
-    } catch {
-      return false;
+    const formatters = getFormatters()[ext];
+    if (!formatters || formatters.length === 0) return false;
+    let ok = true;
+    for (const formatter of formatters) {
+      try {
+        execFileSync(formatter.command, formatter.args(absPath), {
+          timeout: 10000,
+          stdio: "pipe",
+        });
+      } catch {
+        ok = false;
+      }
     }
+    return ok;
   }
 
   // ── Auto-diagnostics after edit/write ─────────────────────
