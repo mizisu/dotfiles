@@ -1,9 +1,47 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import { subscribe } from "node:diagnostics_channel";
 
 const BAR_WIDTH = 12;
+
 const LEGACY_STATUS_KEY = "context-usage-progress";
+
+interface PlanUsage {
+	utilization5h: number;
+	resetsAt: number | null;
+}
+
+let latestPlanUsage: PlanUsage | null = null;
+let requestRender: (() => void) | null = null;
+
+function parseUndiciHeaders(rawHeaders: (Buffer | string)[]): Map<string, string> {
+	const headers = new Map<string, string>();
+	for (let i = 0; i < rawHeaders.length; i += 2) {
+		const key = rawHeaders[i].toString().toLowerCase();
+		const value = rawHeaders[i + 1].toString();
+		headers.set(key, value);
+	}
+	return headers;
+}
+
+subscribe("undici:request:headers", (message: any) => {
+	try {
+		const origin = message.request?.origin?.toString() ?? "";
+		if (!origin.includes("anthropic.com")) return;
+		const headers = parseUndiciHeaders(message.response?.headers ?? []);
+		const util5h = headers.get("anthropic-ratelimit-unified-5h-utilization");
+		if (!util5h) return;
+		const resetHeader = headers.get("anthropic-ratelimit-unified-5h-resets-at")
+			?? headers.get("anthropic-ratelimit-unified-5h-reset")
+			?? headers.get("anthropic-ratelimit-resets-at");
+		latestPlanUsage = {
+			utilization5h: parseFloat(util5h),
+			resetsAt: resetHeader ? parseInt(resetHeader, 10) : null,
+		};
+		requestRender?.();
+	} catch {}
+});
 
 function sanitizeStatusText(text: string): string {
 	return text
@@ -45,13 +83,36 @@ function renderContextUsage(
 	return `${theme.fg(color, `[${bar}]`)} ${theme.fg(color, usageText)}`;
 }
 
+function formatPlanDuration(ms: number): string {
+	if (ms <= 0) return "곧 리셋";
+	const hours = Math.floor(ms / 3600000);
+	const minutes = Math.floor((ms % 3600000) / 60000);
+	if (hours > 0) return `${hours}h${minutes}m`;
+	if (minutes > 0) return `${minutes}m`;
+	return `${Math.floor(ms / 1000)}s`;
+}
+
+function renderPlanUsage(theme: any): string {
+	if (!latestPlanUsage) return "";
+	const percent = Math.round(latestPlanUsage.utilization5h * 100);
+	const color = percent > 90 ? "error" : percent > 70 ? "warning" : "dim";
+	let text = `Plan ${theme.fg(color, `${percent}%`)}`;
+	if (latestPlanUsage.resetsAt) {
+		const resetMs = latestPlanUsage.resetsAt * 1000 - Date.now();
+		text += theme.fg("dim", `(${formatPlanDuration(resetMs)})`);
+	}
+	return text;
+}
+
 function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
 	if (!ctx.hasUI) return;
 
 	ctx.ui.setStatus(LEGACY_STATUS_KEY, undefined);
+	ctx.ui.setStatus("claude-usage", undefined);
 
 	ctx.ui.setFooter((tui, theme, footerData) => {
 		const unsub = footerData.onBranchChange(() => tui.requestRender());
+		requestRender = () => tui.requestRender();
 
 		return {
 			dispose: unsub,
@@ -105,6 +166,9 @@ function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
 					statsParts.push(`$${totalCost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`);
 				}
 				statsParts.push(contextDisplay);
+
+				const planDisplay = renderPlanUsage(theme);
+				if (planDisplay) statsParts.push(planDisplay);
 
 				let statsLeft = statsParts.join(" ");
 				let statsLeftWidth = visibleWidth(statsLeft);
