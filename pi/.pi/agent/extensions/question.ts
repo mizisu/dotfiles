@@ -12,6 +12,8 @@ import {
 	matchesKey,
 	Text,
 	truncateToWidth,
+	visibleWidth,
+	wrapTextWithAnsi,
 } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 
@@ -294,6 +296,21 @@ export default function (pi: ExtensionAPI) {
 						if (cache) return cache;
 						const lines: string[] = [];
 						const add = (s: string) => lines.push(truncateToWidth(s, width));
+						const addWrappedWithPrefix = (prefix: string, content: string) => {
+							const prefixWidth = visibleWidth(prefix);
+							const continuation = " ".repeat(prefixWidth);
+							const wrapped = wrapTextWithAnsi(
+								content,
+								Math.max(1, width - prefixWidth),
+							);
+							if (!wrapped.length) return lines.push(truncateToWidth(prefix, width));
+							for (let i = 0; i < wrapped.length; i++) {
+								lines.push(
+									truncateToWidth(`${i === 0 ? prefix : continuation}${wrapped[i]}`, width),
+								);
+							}
+						};
+						const addWrapped = (s: string) => addWrappedWithPrefix("", s);
 
 						add(theme.fg("accent", "─".repeat(width)));
 
@@ -330,8 +347,9 @@ export default function (pi: ExtensionAPI) {
 								const a = answer(i);
 								const h = questions[i].header;
 								if (a && a.selected.size > 0) {
-									add(
-										` ${theme.fg("muted", `${h}:`)} ${theme.fg("text", [...a.selected].join(", "))}`,
+									addWrappedWithPrefix(
+										` ${theme.fg("muted", `${h}:`)} `,
+										theme.fg("text", [...a.selected].join(", ")),
 									);
 								} else {
 									add(
@@ -344,7 +362,7 @@ export default function (pi: ExtensionAPI) {
 						} else {
 							// Question content
 							const question = q();
-							add(theme.fg("text", ` ${question.question}`));
+							addWrapped(theme.fg("text", ` ${question.question}`));
 							if (question.multiple)
 								add(theme.fg("dim", "  (select multiple)"));
 							lines.push("");
@@ -381,9 +399,9 @@ export default function (pi: ExtensionAPI) {
 										: "text";
 								add(prefix + theme.fg(color, `${icon} ${opt.label}`));
 								if (opt.description)
-									add(`     ${theme.fg("muted", opt.description)}`);
+									addWrappedWithPrefix("     ", theme.fg("muted", opt.description));
 								if (custom && !editing && ct)
-									add(`     ${theme.fg("dim", `"${ct}"`)}`);
+									addWrappedWithPrefix("     ", theme.fg("dim", `"${ct}"`));
 							}
 
 							// Inline editor
