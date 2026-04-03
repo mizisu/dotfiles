@@ -1,0 +1,11 @@
+{
+  "name": "pi-mermaid",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "beautiful-mermaid": "^1.1"
+  },
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}
