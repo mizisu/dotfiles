@@ -44,7 +44,7 @@ require("lazy").setup({
 
     { import = "lazyvim.plugins.extras.ai.copilot" },
 
-    { import = "lazyvim.plugins.extras.formatting.biome" },
+    { import = "lazyvim.plugins.extras.lang.typescript.biome" },
     { import = "lazyvim.plugins.extras.linting.eslint" },
 
     { import = "lazyvim.plugins.extras.lsp.none-ls" },
