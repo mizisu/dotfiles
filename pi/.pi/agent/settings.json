@@ -1,17 +1,19 @@
 {
-  "lastChangelogVersion": "0.64.0",
-  "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-5.4",
+  "lastChangelogVersion": "0.65.2",
+  "defaultProvider": "anthropic",
+  "defaultModel": "claude-opus-4-6",
   "theme": "catppuccin-macchiato",
   "editorPaddingX": 1,
   "defaultThinkingLevel": "xhigh",
   "enabledModels": [
     "anthropic/claude-opus-4-6",
+    "anthropic/claude-sonnet-4-6",
     "openai-codex/gpt-5.4"
   ],
   "hideThinkingBlock": false,
   "terminal": {
-    "showImages": true
+    "showImages": true,
+    "clearOnShrink": false
   },
   "showHardwareCursor": true,
   "doubleEscapeAction": "tree",
@@ -19,6 +21,7 @@
     "git:github.com/pasky/chrome-cdp-skill@v1.0.1"
   ],
   "compaction": {
-    "enabled": false
-  }
+    "enabled": true
+  },
+  "quietStartup": true
 }
