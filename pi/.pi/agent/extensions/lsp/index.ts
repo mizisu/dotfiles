@@ -5,7 +5,17 @@ import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
 } from "@mariozechner/pi-coding-agent";
-import { Container, SelectList, Text, type SelectItem } from "@mariozechner/pi-tui";
+import {
+  Container,
+  Input,
+  Key,
+  SelectList,
+  Text,
+  matchesKey,
+  type Component,
+  type Focusable,
+  type SelectItem,
+} from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { spawnSync } from "node:child_process";
 import { resolve, extname, relative, dirname, join } from "node:path";
@@ -462,30 +472,16 @@ export default function (pi: ExtensionAPI) {
 
   // ── Lifecycle ──────────────────────────────────────────────
 
-  pi.on("session_start", async (_event, ctx) => {
+  pi.on("session_start", async (event, ctx) => {
     currentCtx = ctx;
-    symbolGeneration = 0;
-    reindexing = false;
-    startServers(ctx.cwd);
 
-    if (clients.length > 0) {
-      if (ctx.hasUI) {
-        ctx.ui.setStatus("lsp", ctx.ui.theme.fg("dim", `LSP: starting ${clients.map((c) => c.name).join(", ")}…`));
-      }
-      startGitHeadTracking();
-    } else {
-      stopGitHeadTracking();
-      updateStatus(ctx);
-    }
-  });
-
-  pi.on("session_switch", async (_event, ctx) => {
-    currentCtx = ctx;
-    if (ctx.cwd === projectRoot) {
+    if (event.reason !== "startup" && ctx.cwd === projectRoot) {
       updateStatus(ctx);
       return;
     }
 
+    symbolGeneration = 0;
+    reindexing = false;
     stopGitHeadTracking();
     await shutdownServers();
     startServers(ctx.cwd);
@@ -496,6 +492,7 @@ export default function (pi: ExtensionAPI) {
       }
       startGitHeadTracking();
     } else {
+      stopGitHeadTracking();
       updateStatus(ctx);
     }
   });
@@ -747,60 +744,61 @@ export default function (pi: ExtensionAPI) {
       if (getPyClients().length === 0) { ctx.ui.notify("No Python LSP running", "warning"); return; }
 
       const result = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
-        let root = new Container();
+        const termRows = tui.terminal.rows || 24;
+        const maxVisible = Math.min(20, Math.max(5, termRows - 8));
+
+        const borderTop = new DynamicBorder((s: string) => theme.fg("accent", s));
+        const borderBottom = new DynamicBorder((s: string) => theme.fg("accent", s));
+        const searchInput = new Input();
+        const listTheme = {
+          selectedPrefix: (text: string) => theme.fg("accent", text),
+          selectedText: (text: string) => theme.fg("accent", text),
+          description: (text: string) => theme.fg("dim", text),
+          scrollInfo: (text: string) => theme.fg("dim", text),
+          noMatch: () => theme.fg("warning", "  No results"),
+        };
+
         let items: SelectItem[] = [];
-        let selectList: SelectList | null = null;
-        let query = "";
+        let selectList = new SelectList(items, maxVisible, listTheme);
         let searching = false;
         let debounceTimer: ReturnType<typeof setTimeout> | null = null;
         let activeQuery = "";
+        let focused = false;
+        let lastQuery = "";
 
-        function rebuild() {
-          const c = new Container();
-          c.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-          c.addChild(new Text(
-            theme.fg("accent", theme.bold("# Symbol Search")) + theme.fg("muted", `  ${query || "…"}`),
-            1, 0,
-          ));
+        function rebuildSelectList() {
+          selectList = new SelectList(items, maxVisible, listTheme);
+        }
 
-          if (items.length > 0) {
-            selectList = new SelectList(items, Math.min(items.length, 15), {
-              selectedPrefix: (t) => theme.fg("accent", t),
-              selectedText: (t) => theme.fg("accent", t),
-              description: (t) => theme.fg("dim", t),
-              scrollInfo: (t) => theme.fg("dim", t),
-              noMatch: (t) => theme.fg("warning", t),
-            });
-            selectList.onSelect = (item) => done(item.value);
-            selectList.onCancel = () => done(null);
-            c.addChild(selectList);
-          } else if (searching || reindexing) {
-            const msg = reindexing ? "  Indexing after branch change…" : "  Searching…";
-            c.addChild(new Text(theme.fg("muted", msg), 0, 0));
-          } else if (query.length >= 2) {
-            c.addChild(new Text(theme.fg("muted", "  No results"), 0, 0));
-          }
-
-          c.addChild(new Text(theme.fg("dim", "type to search • ↑↓ navigate • enter select • esc cancel"), 1, 0));
-          c.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-          root = c;
+        function queueSearch() {
+          if (debounceTimer) clearTimeout(debounceTimer);
+          items = [];
+          rebuildSelectList();
+          debounceTimer = setTimeout(doSearch, 200);
+          tui.requestRender();
         }
 
         function doSearch() {
-          if (query.length < 2) { items = []; searching = false; rebuild(); tui.requestRender(); return; }
+          const query = searchInput.getValue();
+          if (query.length < 2) {
+            searching = false;
+            items = [];
+            rebuildSelectList();
+            tui.requestRender();
+            return;
+          }
 
           const q = query;
           const searchGeneration = symbolGeneration;
           activeQuery = q;
           searching = true;
-          rebuild();
           tui.requestRender();
 
           const pyClients = getPyClients();
           if (pyClients.length === 0) {
             searching = false;
             items = [];
-            rebuild();
+            rebuildSelectList();
             tui.requestRender();
             return;
           }
@@ -811,7 +809,7 @@ export default function (pi: ExtensionAPI) {
               if (searchGeneration !== symbolGeneration) {
                 searching = false;
                 items = [];
-                rebuild();
+                rebuildSelectList();
                 tui.requestRender();
                 return;
               }
@@ -822,53 +820,105 @@ export default function (pi: ExtensionAPI) {
                 const suffix = s.containerName ? ` (${s.containerName})` : "";
                 return {
                   value: `${rel}:${s.line}:${s.character}`,
-                  // Keep results on a single label line.
-                  // This avoids SelectList's label+description width bug with wide chars (e.g. Korean).
                   label: `${s.name}${suffix}  ${s.kind}  ${rel}:${s.line}`,
                 };
               });
               searching = false;
-              rebuild();
+              rebuildSelectList();
               tui.requestRender();
             })
             .catch(() => {
               if (activeQuery !== q) return;
               searching = false;
               items = [];
-              rebuild();
+              rebuildSelectList();
               tui.requestRender();
             });
         }
 
-        rebuild();
+        const comp: Component & Focusable = {
+          get focused() { return focused; },
+          set focused(value: boolean) { focused = value; searchInput.focused = value; },
 
-        return {
-          render: (w) => root.render(w),
-          invalidate: () => root.invalidate(),
-          handleInput: (data) => {
-            if (data === "\x1b") { done(null); return; }
-            if (selectList && items.length > 0 && (data === "\r" || data === "\x1b[A" || data === "\x1b[B")) {
+          render(width: number): string[] {
+            const lines: string[] = [];
+            const query = searchInput.getValue();
+            const status = reindexing
+              ? theme.fg("dim", " indexing")
+              : searching
+                ? theme.fg("dim", " searching")
+                : query.length >= 2
+                  ? theme.fg("dim", ` ${items.length} results`)
+                  : theme.fg("dim", " type 2+ chars");
+
+            lines.push(...borderTop.render(width));
+            lines.push(" " + theme.fg("accent", theme.bold("🔎 Symbols")) + status);
+            lines.push("");
+            for (const line of searchInput.render(width - 2)) lines.push(" " + line);
+            lines.push(theme.fg("dim", " " + "─".repeat(Math.max(1, width - 2))));
+
+            if (items.length > 0) {
+              lines.push(...selectList.render(width));
+            } else if (searching || reindexing) {
+              const msg = reindexing ? "  Indexing after branch change…" : "  Searching…";
+              lines.push(theme.fg("muted", msg));
+            } else if (query.length >= 2) {
+              lines.push(theme.fg("warning", "  No results"));
+            } else if (query.length > 0) {
+              lines.push(theme.fg("muted", "  Type at least 2 characters"));
+            }
+
+            lines.push("");
+            lines.push(
+              " " +
+                theme.fg("dim", "↑↓") + theme.fg("muted", " navigate  ") +
+                theme.fg("dim", "enter") + theme.fg("muted", " select  ") +
+                theme.fg("dim", "esc") + theme.fg("muted", " cancel"),
+            );
+            lines.push(...borderBottom.render(width));
+            return lines;
+          },
+
+          invalidate() {
+            borderTop.invalidate();
+            borderBottom.invalidate();
+            searchInput.invalidate();
+            selectList.invalidate();
+          },
+
+          handleInput(data: string) {
+            if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
+              done(null);
+              return;
+            }
+
+            if (matchesKey(data, Key.enter)) {
+              done(selectList.getSelectedItem()?.value ?? null);
+              return;
+            }
+
+            if (
+              matchesKey(data, Key.up) ||
+              matchesKey(data, Key.down) ||
+              matchesKey(data, Key.pageUp) ||
+              matchesKey(data, Key.pageDown)
+            ) {
               selectList.handleInput(data);
               tui.requestRender();
               return;
             }
-            if (data === "\x7f") {
-              query = query.slice(0, -1);
-            } else if (data.length === 1 && data >= " ") {
-              query += data;
-            } else if (selectList) {
-              selectList.handleInput(data);
-              tui.requestRender();
-              return;
+
+            searchInput.handleInput(data);
+            const query = searchInput.getValue();
+            if (query !== lastQuery) {
+              queueSearch();
+              lastQuery = query;
             }
-            if (debounceTimer) clearTimeout(debounceTimer);
-            debounceTimer = setTimeout(doSearch, 200);
-            items = [];
-            selectList = null;
-            rebuild();
             tui.requestRender();
           },
         };
+
+        return comp;
       }, { overlay: true });
 
       if (result) {

@@ -90,7 +90,7 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		const result = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+		await ctx.ui.custom<null>((tui, theme, _kb, done) => {
 			const termRows = tui.terminal.rows || 24;
 			const maxVisible = Math.min(30, Math.max(5, termRows - 8));
 
@@ -189,7 +189,10 @@ export default function (pi: ExtensionAPI) {
 
 					if (matchesKey(data, Key.enter)) {
 						const selected = selectList.getSelectedItem();
-						done(selected ? selected.value : null);
+						if (selected) {
+							ctx.ui.pasteToEditor(`@${selected.value} `);
+						}
+						done(null);
 						return;
 					}
 
@@ -216,10 +219,6 @@ export default function (pi: ExtensionAPI) {
 
 			return comp;
 		}, { overlay: true });
-
-		if (result) {
-			ctx.ui.pasteToEditor(`@${result} `);
-		}
 	}
 
 	pi.registerShortcut("@", {
