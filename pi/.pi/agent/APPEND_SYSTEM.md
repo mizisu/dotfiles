@@ -118,7 +118,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 ### Never
 
 - Read files one by one hoping to find something.
-- Use `grep` when `rg` is available.
+- Use `grep` — always use `rg`.
 - Use `bash cat` to read files when `read` tool exists.
 - Use `code_search` more than 2-3 times for the same concept — switch tools.
 - Apply a `language` filter on the first search attempt.
@@ -128,4 +128,19 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 - `edit`/`write` tools auto-format and run LSP diagnostics. Don't re-run formatters or `get_diagnostics` on files you just modified.
 - Run Python with `uv run python` (not `python` or `python3`)
 - Use ripgrep: `rg -t py "pattern"` (no `--include` flag; use `-g '*.py'` or `-t py`)
-- Use `rg` instead of `grep`
+- **NEVER use `grep`. Always use `rg`.** No exceptions — not in pipes, not in one-liners.
+
+## 7. Context Economy
+
+**Every turn's cost scales with total context size. Keep context small.**
+
+- After `edit`, trust its output — it already contains the updated file content.
+- After `edit`/`write`, trust the auto-diagnostics — they already run automatically.
+- When using `read`, use `offset`/`limit` to fetch only the relevant section.
+- When bash output may be long, pipe through `| head -50` or `| tail -20`.
+- If you've read the same file 3+ times in one conversation, rethink your approach.
+
+## 8. Mermaid Rules
+
+- When writing Mermaid diagrams, use English labels only inside Mermaid source.
+- Keep Mermaid node, participant, and note labels short. Put detailed Korean explanation outside the diagram.
