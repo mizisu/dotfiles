@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires a browser to view generated HTML files. Optional surf-cli for AI image generation.
 metadata:
   author: nicobailon
-  version: "0.5.1"
+  version: "0.6.3"
 disable-model-invocation: true
 ---
 
@@ -17,7 +17,7 @@ Generate self-contained HTML files for technical diagrams, visualizations, and d
 
 ## Available Commands
 
-Detailed prompt templates in `./commands/`. In Pi, these are slash commands (`/diff-review`). In Claude Code, namespaced (`/visual-explainer:diff-review`). In Codex, use `/prompts:diff-review` (if installed to `~/.codex/prompts/`) or invoke `$visual-explainer` and describe the workflow.
+Detailed prompt templates in `./commands/`. In this Pi setup, the installed slash command aliases use the `vi-` prefix (for example, `/vi-diff-review`). The legacy unprefixed prompt names can still coexist. In Claude Code, commands remain namespaced (`/visual-explainer:diff-review`). In Codex, use `/prompts:diff-review` (if installed to `~/.codex/prompts/`) or invoke `$visual-explainer` and describe the workflow.
 
 | Command | What it does |
 |---------|-------------|
@@ -26,6 +26,7 @@ Detailed prompt templates in `./commands/`. In Pi, these are slash commands (`/d
 | `generate-slides` | Generate a magazine-quality slide deck |
 | `diff-review` | Visual diff review with architecture comparison and code review |
 | `plan-review` | Compare a plan against the codebase with risk assessment |
+| `project-recap` | Mental model snapshot for context-switching back to a project |
 | `fact-check` | Verify accuracy of a document against actual code |
 | `share` | Deploy an HTML page to Vercel and get a live URL |
 
