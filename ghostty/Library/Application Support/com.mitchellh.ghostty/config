@@ -32,7 +32,8 @@ window-padding-y = 0
 
 keybind = global:cmd+grave_accent=toggle_quick_terminal
 keybind = alt+backspace=text:\x1b\x7f
-keybind = shift+enter=text:\\\n\r
+# Removed for pi/tmux: let Shift+Enter pass through as a real key event
+# keybind = shift+enter=text:\\\n\r
 quick-terminal-position = right
 quick-terminal-size = 50%
 
