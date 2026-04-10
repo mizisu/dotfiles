@@ -9,9 +9,11 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { complete, getModel } from "@mariozechner/pi-ai";
+import { complete } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { openBaseBranchPicker } from "./shared/branch-picker.js";
+import { resolveMediumModel } from "./shared/model-slots.js";
+import { registerSuccessMessageRenderer } from "./shared/success-message-renderer.js";
 
 function findPrTemplate(cwd: string): string | undefined {
 	const candidates = [
@@ -97,18 +99,24 @@ Rules:
   - Bad: "Update code", "Fix bug", "Refactor stuff", "Changes" (too vague)
   - Bad: "Add exponential backoff to payment webhook retries to fix flaky API calls that were causing issues in production" (too long)
   - Do NOT use conventional commit prefixes (feat:, fix:, chore:, …). Just write a plain descriptive title.
-- Body: fill in the PR template sections if provided. If no template, use: ## Summary, ## Changes, ## Why
-- For every change, prioritize explaining WHY over what. The diff already shows what changed.
-- If session context contains decision-making (why an approach was chosen, alternatives considered), include that.
+- Body: keep it concise and scannable.
+  - Fill in the PR template sections if provided.
+  - If no template, use only the sections that add value: ## Summary and ## Why.
+  - Prefer 3-6 bullets total for the whole body.
+  - Each bullet should be short, concrete, and usually a single sentence.
+  - Do not repeat the diff file-by-file or mention trivial implementation details.
+- Prioritize explaining WHY over what. The diff already shows what changed.
+- Focus on the most reviewer-relevant 1-3 changes, not every small edit.
+- If session context contains decision-making (why an approach was chosen, alternatives considered), include only the parts that materially help reviewers.
 - Session context and conversation history are hints about intent — if they conflict with the diff, trust the diff.
 - Do not invent changes not present in the diff.
 - Describe the problem or fix itself, not who reported it. Never reference reviewers or tools (e.g. "coderabbit", "reviewer pointed out"). Instead of "Fix issue raised by coderabbit", write "Fix null check on empty input".
-- Always use "- " (dash) for bullet points. Never use "* " or other bullet styles. Even when a section has only one item, use "- " — never write bare prose lines.
-- When the diff involves non-trivial architectural changes, add a Mermaid diagram in the body to help reviewers.
-  Good use cases: new component/module relationships, changed data flow or state transitions, request/response sequences, before/after architecture comparison.
-  Bad use cases: simple bug fixes, config changes, renaming, single-file tweaks. Do NOT force a diagram when it adds no value.
-  Use the simplest diagram type that fits: flowchart (dependency/flow), sequenceDiagram (interactions), stateDiagram-v2 (state machines), graph TD (hierarchies).
-  Keep diagrams compact (under ~15 nodes). Wrap in a \`\`\`mermaid fenced code block.
+- Always use "- " (dash) for bullet points. Never use "* " or other bullet styles. Even when a section has only one item, use "- ".
+- Add a Mermaid diagram only when it is clearly necessary to explain a non-trivial architectural change.
+  - Good use cases: new component/module relationships, changed data flow or state transitions, request/response sequences, before/after architecture comparison.
+  - Bad use cases: simple bug fixes, config changes, renaming, single-file tweaks.
+  - Use the simplest diagram type that fits: flowchart (dependency/flow), sequenceDiagram (interactions), stateDiagram-v2 (state machines), graph TD (hierarchies).
+  - Keep diagrams compact (under ~15 nodes). Wrap in a \`\`\`mermaid fenced code block.
 
 Output ONLY valid JSON — no markdown fences, no explanation:
 {
@@ -119,22 +127,23 @@ Output ONLY valid JSON — no markdown fences, no explanation:
 // --- extension ---
 
 export default function (pi: ExtensionAPI) {
+	registerSuccessMessageRenderer(pi, "pr");
+
 	pi.registerCommand("pr", {
 		description: "Create a GitHub PR (isolated context, fuzzy branch picker)",
 		handler: async (_args, ctx) => {
-			if (!ctx.model) { ctx.ui.notify("No model selected", "error"); return; }
-
 			// 1. pick base branch
 			const base = await openBaseBranchPicker(ctx);
 			if (!base) return;
 
 			// 2. check state
 			ctx.ui.setStatus("pr", "Gathering…");
+			const baseRef = `origin/${base}`;
 			const [branch, status, log, diff] = await Promise.all([
 				pi.exec("git", ["branch", "--show-current"]),
 				pi.exec("git", ["status", "--short"]),
-				pi.exec("git", ["log", "--oneline", `${base}..HEAD`]),
-				pi.exec("git", ["diff", `${base}..HEAD`]),
+				pi.exec("git", ["log", "--oneline", `${baseRef}..HEAD`]),
+				pi.exec("git", ["diff", `${baseRef}...HEAD`]),
 			]);
 
 			if (!diff.stdout.trim() && !log.stdout.trim()) {
@@ -157,15 +166,16 @@ export default function (pi: ExtensionAPI) {
 
 			// 4. generate via isolated LLM call
 			ctx.ui.setStatus("pr", "Generating PR…");
-			const sonnet = getModel("anthropic", "claude-sonnet-4-6");
-			const auth = await ctx.modelRegistry.getApiKeyAndHeaders(sonnet);
-			if (!auth.ok) {
+			const resolved = await resolveMediumModel(ctx);
+			if (resolved.fallbackReason) ctx.ui.notify(resolved.fallbackReason, "warning");
+			if (!resolved.model || !resolved.auth) {
 				ctx.ui.setStatus("pr", undefined);
-				ctx.ui.notify(`Auth error: ${auth.error}`, "error");
+				ctx.ui.notify(resolved.error ?? "No model selected", "error");
 				return;
 			}
+			const { model, auth } = resolved;
 			const resp = await complete(
-				sonnet,
+				model,
 				{
 					systemPrompt: SYSTEM,
 					messages: [{
@@ -245,7 +255,7 @@ export default function (pi: ExtensionAPI) {
 			await pi.exec("open", [prUrl]);
 			ctx.ui.notify(`PR created: ${prUrl}`, "success");
 			pi.sendMessage(
-				{ customType: "pr", content: `Created draft PR: ${prUrl}\n\n**${title}**`, display: true },
+				{ customType: "pr", content: `✓ Created draft PR: ${prUrl}\nTitle: ${title}`, display: true },
 				{ triggerTurn: false },
 			);
 		},

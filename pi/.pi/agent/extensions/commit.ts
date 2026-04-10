@@ -9,8 +9,10 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { complete, getModel } from "@mariozechner/pi-ai";
+import { complete } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { resolveMediumModel } from "./shared/model-slots.js";
+import { registerSuccessMessageRenderer } from "./shared/success-message-renderer.js";
 
 const SYSTEM = `You analyze git changes and produce a commit plan.
 
@@ -149,14 +151,11 @@ function buildCommitSessionContext(ctx: any): string {
 // --- extension ---
 
 export default function (pi: ExtensionAPI) {
+	registerSuccessMessageRenderer(pi, "commit");
+
 	pi.registerCommand("commit", {
 		description: "Smart commit: split changes by context (isolated)",
 		handler: async (args, ctx) => {
-			if (!ctx.model) {
-				ctx.ui.notify("No model selected", "error");
-				return;
-			}
-
 			// 1. gather
 			ctx.ui.setStatus("commit", "Gathering…");
 			const [log, status, diff, untracked] = await Promise.all([
@@ -184,15 +183,16 @@ export default function (pi: ExtensionAPI) {
 
 			// 2. analyze (separate context — diffs never enter main conversation)
 			ctx.ui.setStatus("commit", "Analyzing…");
-			const sonnet = getModel("anthropic", "claude-sonnet-4-6");
-			const auth = await ctx.modelRegistry.getApiKeyAndHeaders(sonnet);
-			if (!auth.ok) {
+			const resolved = await resolveMediumModel(ctx);
+			if (resolved.fallbackReason) ctx.ui.notify(resolved.fallbackReason, "warning");
+			if (!resolved.model || !resolved.auth) {
 				ctx.ui.setStatus("commit", undefined);
-				ctx.ui.notify(`Auth error: ${auth.error}`, "error");
+				ctx.ui.notify(resolved.error ?? "No model selected", "error");
 				return;
 			}
+			const { model, auth } = resolved;
 			const resp = await complete(
-				sonnet,
+				model,
 				{
 					systemPrompt: SYSTEM,
 					messages: [
@@ -392,7 +392,7 @@ export default function (pi: ExtensionAPI) {
 			if (completedCommits.length > 0) {
 				const summary = completedCommits.map((c, i) => `${i + 1}. ${c.subject}`).join("\n");
 				pi.sendMessage(
-					{ customType: "commit", content: `Committed ${completedCommits.length} change(s):\n${summary}`, display: true },
+					{ customType: "commit", content: `✓ Committed ${completedCommits.length} change(s):\n${summary}`, display: true },
 					{ triggerTurn: false },
 				);
 			}
