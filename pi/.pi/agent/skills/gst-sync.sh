@@ -9,6 +9,32 @@ GSTACK_DIR="$HOME/.pi/agent/git/github.com/garrytan/gstack"
 SKILLS_DIR="$HOME/.pi/agent/skills"
 PREFIX="gst"
 
+patch_disable_model_invocation() {
+  local skill_md="$1"
+
+  if ! rg -q '^disable-model-invocation: true$' "$skill_md"; then
+    awk '
+      BEGIN { added = 0; frontmatter = 0 }
+      /^---$/ {
+        if (frontmatter == 0) {
+          frontmatter = 1
+          print
+          next
+        }
+        if (frontmatter == 1 && added == 0) {
+          print "disable-model-invocation: true"
+          added = 1
+          frontmatter = 2
+        }
+        print
+        next
+      }
+      { print }
+    ' "$skill_md" > "$skill_md.tmp"
+    mv "$skill_md.tmp" "$skill_md"
+  fi
+}
+
 if [ ! -d "$GSTACK_DIR" ]; then
   echo "ERROR: gstack not found at $GSTACK_DIR"
   echo "Run: git clone https://github.com/garrytan/gstack.git $GSTACK_DIR"
@@ -49,6 +75,7 @@ for skill_name in "${skill_dirs[@]}"; do
 
   # Copy SKILL.md with modified name field
   sed -E "s/^name: .+$/name: ${target_name}/" "$src_dir/SKILL.md" > "$target_dir/SKILL.md"
+  patch_disable_model_invocation "$target_dir/SKILL.md"
 
   # Symlink all other files/directories (skip SKILL.md)
   for item in "$src_dir"/*; do

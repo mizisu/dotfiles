@@ -17,7 +17,7 @@ Generate self-contained HTML files for technical diagrams, visualizations, and d
 
 ## Available Commands
 
-Detailed prompt templates in `./commands/`. In this Pi setup, the installed slash command aliases use the `vi-` prefix (for example, `/vi-diff-review`). The legacy unprefixed prompt names can still coexist. In Claude Code, commands remain namespaced (`/visual-explainer:diff-review`). In Codex, use `/prompts:diff-review` (if installed to `~/.codex/prompts/`) or invoke `$visual-explainer` and describe the workflow.
+Detailed prompt templates in `./commands/`. In this Pi setup, the installed slash command aliases use the `vi-` prefix (for example, `/vi-diff-review`). In Claude Code, commands remain namespaced (`/visual-explainer:diff-review`). In Codex, use `/prompts:diff-review` (if installed to `~/.codex/prompts/`) or invoke `$visual-explainer` and describe the workflow.
 
 | Command | What it does |
 |---------|-------------|

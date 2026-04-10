@@ -32,7 +32,7 @@ No Vercel account, Cloudflare account, or API keys needed. The deployment is "cl
 ## Script Location
 
 ```bash
-bash /Users/charles/.pi/agent/skills/visual-explainer/scripts/vi-share.sh <file>
+bash /Users/charles/.pi/agent/skills/visual-explainer/scripts/share.sh <file>
 ```
 
 ## Output

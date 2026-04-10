@@ -97,7 +97,7 @@ patch_skill_dir_placeholders() {
 patch_skill_note() {
   local skill_md="$SKILL_DIR/SKILL.md"
   local old_text='Detailed prompt templates in `./commands/`. In Pi, these are slash commands (`/diff-review`). In Claude Code, namespaced (`/visual-explainer:diff-review`). In Codex, use `/prompts:diff-review` (if installed to `~/.codex/prompts/`) or invoke `$visual-explainer` and describe the workflow.'
-  local new_text='Detailed prompt templates in `./commands/`. In this Pi setup, the installed slash command aliases use the `vi-` prefix (for example, `/vi-diff-review`). The legacy unprefixed prompt names can still coexist. In Claude Code, commands remain namespaced (`/visual-explainer:diff-review`). In Codex, use `/prompts:diff-review` (if installed to `~/.codex/prompts/`) or invoke `$visual-explainer` and describe the workflow.'
+  local new_text='Detailed prompt templates in `./commands/`. In this Pi setup, the installed slash command aliases use the `vi-` prefix (for example, `/vi-diff-review`). In Claude Code, commands remain namespaced (`/visual-explainer:diff-review`). In Codex, use `/prompts:diff-review` (if installed to `~/.codex/prompts/`) or invoke `$visual-explainer` and describe the workflow.'
 
   if rg -q 'In Pi, these are slash commands' "$skill_md"; then
     OLD_TEXT="$old_text" NEW_TEXT="$new_text" perl -0pi -e 's/\Q$ENV{OLD_TEXT}\E/$ENV{NEW_TEXT}/g' "$skill_md"
@@ -117,7 +117,6 @@ install_prompts() {
     local base
     base="$(basename "$prompt")"
 
-    cp "$prompt" "$PROMPTS_DIR/$base"
     cp "$prompt" "$PROMPTS_DIR/$PROMPT_PREFIX$base"
   done
 }
@@ -127,7 +126,7 @@ patch_prefixed_prompt_usages() {
     [ -f "$prompt" ] || continue
 
     for command_name in "${COMMAND_NAMES[@]}"; do
-      perl -0pi -e "s#/${command_name}\\b#/${PROMPT_PREFIX}${command_name}#g" "$prompt"
+      perl -0pi -e "s#(?<![[:alnum:]_.-])/${command_name}(?=(?:[[:space:]\`<),.:;!?]|$))#/${PROMPT_PREFIX}${command_name}#g" "$prompt"
     done
   done
 }
