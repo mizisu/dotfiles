@@ -2,7 +2,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { complete } from "@mariozechner/pi-ai";
 import { resolveSmallModel } from "./shared/model-slots.js";
 
-const MAX_NAME_LENGTH = 48;
+const MAX_NAME_LENGTH = 72;
 const MAX_USER_MESSAGE_LENGTH = 1400;
 
 function normalizeText(text: string): string {
@@ -44,7 +44,7 @@ function fallbackName(input: string): string {
 	return normalizeText(input)
 		.split(" ")
 		.filter(Boolean)
-		.slice(0, 8)
+		.slice(0, 12)
 		.join(" ")
 		.slice(0, MAX_NAME_LENGTH) || "새 세션";
 }
@@ -52,7 +52,7 @@ function fallbackName(input: string): string {
 function buildModelPrompt(prompt: string): { systemPrompt: string; messages: { role: "user"; content: { type: "text"; text: string }[]; timestamp: number }[] } {
 	return {
 		systemPrompt:
-			"Generate a short, descriptive session title (1 line, no markdown, no quotes, no prefix). Keep it under 48 characters.",
+			"You create session titles for coding work. Describe the work to be done, not the user's wording. Focus on the action, target, and relevant scope, like 'session-auto-name 제목 길이 늘리기', '로그인 버그 원인 분석 및 수정', 'PR 템플릿 체크리스트 항목 추가', or '캐시 무효화 흐름 설명'. Avoid complaint-style or conversational summaries like '요약이 이상한 것 같아' or '이거 봐줘'. Match the user's language. Prefer titles that are specific enough to distinguish similar tasks, and do not over-shorten them. Return 1 line only, no markdown, no quotes, no prefix, under 72 characters.",
 		messages: [
 			{
 				role: "user",

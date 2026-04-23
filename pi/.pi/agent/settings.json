@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "0.66.1",
+  "lastChangelogVersion": "0.69.0",
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.4",
   "mediumProvider": "openai-codex",
@@ -10,7 +10,8 @@
   "editorPaddingX": 1,
   "defaultThinkingLevel": "xhigh",
   "enabledModels": [
-    "openai-codex/gpt-5.4"
+    "openai-codex/gpt-5.4",
+    "openai-codex/gpt-5.3-codex-spark"
   ],
   "hideThinkingBlock": false,
   "terminal": {
@@ -20,10 +21,12 @@
   "showHardwareCursor": true,
   "doubleEscapeAction": "tree",
   "packages": [
-    "git:github.com/pasky/chrome-cdp-skill@v1.0.1"
+    "git:github.com/pasky/chrome-cdp-skill@v1.0.1",
+    "https://github.com/davebcn87/pi-autoresearch"
   ],
   "compaction": {
     "enabled": true
   },
-  "quietStartup": true
+  "quietStartup": true,
+  "enableInstallTelemetry": false
 }

@@ -1,19 +1,23 @@
 import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth } from "@mariozechner/pi-tui";
 
+const LOGO_ROWS = ["1110", "1010", "1101", "1001"];
+const PIXEL_WIDTH = 5;
+const PIXEL_HEIGHT = 2;
+const LEFT_PAD = "  ";
+
 function getPiLogoLines(theme: Theme): string[] {
-	const pad = "  ";
-	const fill = (count: number) => theme.fg("text", "█".repeat(count));
-	return [
-		"",
-		`${pad}${fill(8)}`,
-		`${pad}${fill(3)}   ${fill(3)}`,
-		`${pad}${fill(3)}   ${fill(3)}`,
-		`${pad}${fill(6)}   ${fill(3)}`,
-		`${pad}${fill(3)}     ${fill(3)}`,
-		`${pad}${fill(3)}     ${fill(3)}`,
-		"",
-	];
+	const fill = "█".repeat(PIXEL_WIDTH);
+	const empty = " ".repeat(PIXEL_WIDTH);
+	const lines = [""];
+
+	for (const row of LOGO_ROWS) {
+		const rawLine = row.split("").map((cell) => (cell === "1" ? fill : empty)).join("");
+		for (let i = 0; i < PIXEL_HEIGHT; i += 1) lines.push(`${LEFT_PAD}${theme.fg("text", rawLine)}`);
+	}
+
+	lines.push("");
+	return lines;
 }
 
 export default function (pi: ExtensionAPI) {
