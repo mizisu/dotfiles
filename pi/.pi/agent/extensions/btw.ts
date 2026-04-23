@@ -31,7 +31,7 @@ import {
 } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { DynamicBorder, getMarkdownTheme } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { readFile } from "node:fs/promises";
 import {
 	Container,

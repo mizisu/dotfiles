@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { Text } from "@mariozechner/pi-tui";
 import { spawn, ChildProcess } from "node:child_process";
 import { createInterface, Interface } from "node:readline";
@@ -156,11 +156,11 @@ export default function (pi: ExtensionAPI) {
     description: [
       "Semantic code search across the codebase using vector embeddings (CodeRankEmbed).",
       "Returns the most relevant code chunks matching a natural language query.",
-      "Use this FIRST to locate relevant code before reading full files.",
+      "Use this after lexical search tools like find, grep, multi_grep, or search_symbols when those did not narrow the code enough.",
       "Results include file paths and line numbers — pass them to the read tool.",
     ].join("\n"),
     promptSnippet:
-      "Semantic code search across the codebase using vector embeddings (CodeRankEmbed).\nReturns the most relevant code chunks matching a natural language query.\nUse this FIRST to locate relevant code before reading full files.\nResults include file paths and line numbers — pass them to the read tool.",
+      "Semantic code search across the codebase using vector embeddings (CodeRankEmbed).\nUse this after find, grep, multi_grep, or search_symbols when lexical search did not narrow the code enough.\nResults include file paths and line numbers — pass them to the read tool.",
     parameters: Type.Object({
       query: Type.String({ description: "Natural language description of the code to find" }),
       top_k: Type.Optional(Type.Number({ description: "Number of results (default 10, max 30)" })),
@@ -204,7 +204,7 @@ export default function (pi: ExtensionAPI) {
           if (wordCount > 4) {
             hints.push("Try a shorter query (2-4 keywords). Use actual code identifiers, not descriptions.");
           }
-          hints.push("Consider using search_symbols or rg instead.");
+          hints.push("Consider using search_symbols, grep, find, or multi_grep instead.");
           const hintText = "\nHints:\n- " + hints.join("\n- ");
           return { content: [{ type: "text", text: text + hintText }], details: {} };
         }
