@@ -1,5 +1,6 @@
 ---
 description: Generate a visual HTML implementation plan — detailed feature specification with state machines, code snippets, and edge cases
+argument-hint: "<feature-request>"
 ---
 Load the visual-explainer skill, then generate a comprehensive visual implementation plan for `$@` as a self-contained HTML page.
 

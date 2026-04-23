@@ -1,5 +1,6 @@
 ---
 description: Generate a visual HTML plan review — current codebase state vs. proposed implementation plan
+argument-hint: "<plan-file> [codebase-path]"
 ---
 Load the visual-explainer skill, then generate a comprehensive visual plan review as a self-contained HTML page, comparing the current codebase against a proposed implementation plan.
 

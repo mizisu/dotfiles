@@ -67,18 +67,20 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ## 5. Code Search Strategy
 
-**Use precise tools first. grep/rg browsing is a last resort.**
+**Use precise built-in tools first. Prefer `find`, `grep`, and `multi_grep` over shell search.**
 
 ### Decision Tree
 
 1. **Know the symbol name** → `search_symbols` (fastest, most reliable)
-2. **Know it exists but not the name** → `code_search` with short English query
-3. **code_search returns nothing** → `rg` with exact string pattern
-4. **Need structure overview** → `project_map`
-5. **Have a symbol, need its definition** → `goto_definition`
-6. **Need all usages** → `find_references`
-7. **Need type info** → `hover_info`
-8. **Need file errors** → `get_diagnostics`
+2. **Know part of a file/path/name** → `find`
+3. **Know one identifier or string** → `grep`
+4. **Know several naming variants or OR terms** → `multi_grep`
+5. **Lexical search still did not narrow it enough** → `code_search` with a short English query
+6. **Need structure overview** → `project_map`
+7. **Have a symbol, need its definition** → `goto_definition`
+8. **Need all usages** → `find_references`
+9. **Need type info** → `hover_info`
+10. **Need file errors** → `get_diagnostics`
 
 ### search_symbols
 
@@ -88,8 +90,18 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 - **Add kind filter only to narrow down** when too many results come back.
 - Use short, exact symbol names. Partial match works, but shorter is better.
 
+### find / grep / multi_grep
+
+- Use `find` for fuzzy file/path lookup.
+- Use `grep` for one identifier, string literal, or regex.
+- Use `multi_grep` for OR logic across naming variants like `snake_case`, `PascalCase`, and `camelCase`.
+- Prefer `grep` in `plain` mode first. Switch to `regex` only when you need regex semantics, and use `fuzzy` for typo-tolerant lookup.
+- Use tool parameters like `path`, `constraints`, `glob`, and `context` instead of shell flags.
+- After 2 search calls, read the best candidate file instead of searching again.
+
 ### code_search (Semantic Vector Search)
 
+- Use `code_search` **after** lexical search when file names, identifiers, and variants still did not narrow the code enough.
 - **Always query in English** — the embedding model is English-optimized.
 - **SHORT queries (2-4 keywords).** Use code identifiers, not natural language descriptions.
   - ✅ `"ReviewCycleEditor edit step"` — uses actual class/method names
@@ -99,7 +111,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 - **DO NOT use the language filter on first search.** Fullstack projects have the same concept in both Python and TypeScript. Search all languages first, then filter if too noisy.
   - ❌ `code_search("ReviewCycleEditor", language="tsx")` → misses Python backend class
   - ✅ `code_search("ReviewCycleEditor")` → finds it regardless of language
-- **If code_search returns nothing after 2 attempts**, stop using it and switch to `rg` or `search_symbols`.
+- **If code_search returns nothing after 2 attempts**, stop using it and switch back to `search_symbols`, `grep`, `multi_grep`, or `find`.
 - `top_k=5` is usually sufficient. Use `top_k=10` only when exploring broadly.
 
 ### Fullstack Search: Don't Assume Frontend or Backend
@@ -118,24 +130,25 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 ### Never
 
 - Read files one by one hoping to find something.
-- Use `grep` — always use `rg`.
+- Use shell `grep` or shell `rg` when built-in `grep`, `find`, or `multi_grep` can do the job.
 - Use `bash cat` to read files when `read` tool exists.
 - Use `code_search` more than 2-3 times for the same concept — switch tools.
 - Apply a `language` filter on the first search attempt.
 
 ## 6. Environment Rules
 
-- `edit`/`write` tools auto-format and run LSP diagnostics. Don't re-run formatters or `get_diagnostics` on files you just modified.
+- `edit`/`write` tools auto-format, auto-fix, and run LSP diagnostics. Don't re-run formatters or `get_diagnostics` on files you just modified.
+- After `edit`/`write`, do not run `biome`, `eslint`, `pyright`, or `ruff` directly to check the same file. Trust the returned LSP auto-fix/diagnostics response instead.
 - Run Python with `uv run python` (not `python` or `python3`)
-- Use ripgrep: `rg -t py "pattern"` (no `--include` flag; use `-g '*.py'` or `-t py`)
-- **NEVER use `grep`. Always use `rg`.** No exceptions — not in pipes, not in one-liners.
+- Prefer built-in `find`, `grep`, and `multi_grep` over shell search commands.
+- **NEVER use shell `grep` or shell `rg` for normal code search.** Use the built-in tools instead.
 
 ## 7. Context Economy
 
 **Every turn's cost scales with total context size. Keep context small.**
 
 - After `edit`, trust its output — it already contains the updated file content.
-- After `edit`/`write`, trust the auto-diagnostics — they already run automatically.
+- After `edit`/`write`, trust the auto-fix + auto-diagnostics response. If it says the file changed again after LSP auto-fix, read the file before relying on exact text matches.
 - When using `read`, use `offset`/`limit` to fetch only the relevant section.
 - When bash output may be long, pipe through `| head -50` or `| tail -20`.
 - If you've read the same file 3+ times in one conversation, rethink your approach.

@@ -1,5 +1,6 @@
 ---
 description: Generate a beautiful standalone HTML diagram and open it in the browser
+argument-hint: "<topic>"
 ---
 Load the visual-explainer skill, then generate an HTML diagram for: $@
 

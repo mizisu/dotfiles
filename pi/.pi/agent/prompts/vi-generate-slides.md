@@ -1,5 +1,6 @@
 ---
 description: Generate a stunning magazine-quality slide deck as a self-contained HTML page
+argument-hint: "<topic>"
 ---
 Load the visual-explainer skill, then generate a slide deck for: $@
 
