@@ -1,7 +1,6 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
-import { subscribe } from "node:diagnostics_channel";
 
 const BAR_WIDTH = 12;
 
@@ -15,33 +14,18 @@ interface PlanUsage {
 let latestPlanUsage: PlanUsage | null = null;
 let requestRender: (() => void) | null = null;
 
-function parseUndiciHeaders(rawHeaders: (Buffer | string)[]): Map<string, string> {
-	const headers = new Map<string, string>();
-	for (let i = 0; i < rawHeaders.length; i += 2) {
-		const key = rawHeaders[i].toString().toLowerCase();
-		const value = rawHeaders[i + 1].toString();
-		headers.set(key, value);
-	}
-	return headers;
+function updatePlanUsage(headers: Record<string, string>): void {
+	const util5h = headers["anthropic-ratelimit-unified-5h-utilization"];
+	if (!util5h) return;
+	const resetHeader = headers["anthropic-ratelimit-unified-5h-resets-at"]
+		?? headers["anthropic-ratelimit-unified-5h-reset"]
+		?? headers["anthropic-ratelimit-resets-at"];
+	latestPlanUsage = {
+		utilization5h: parseFloat(util5h),
+		resetsAt: resetHeader ? parseInt(resetHeader, 10) : null,
+	};
+	requestRender?.();
 }
-
-subscribe("undici:request:headers", (message: any) => {
-	try {
-		const origin = message.request?.origin?.toString() ?? "";
-		if (!origin.includes("anthropic.com")) return;
-		const headers = parseUndiciHeaders(message.response?.headers ?? []);
-		const util5h = headers.get("anthropic-ratelimit-unified-5h-utilization");
-		if (!util5h) return;
-		const resetHeader = headers.get("anthropic-ratelimit-unified-5h-resets-at")
-			?? headers.get("anthropic-ratelimit-unified-5h-reset")
-			?? headers.get("anthropic-ratelimit-resets-at");
-		latestPlanUsage = {
-			utilization5h: parseFloat(util5h),
-			resetsAt: resetHeader ? parseInt(resetHeader, 10) : null,
-		};
-		requestRender?.();
-	} catch {}
-});
 
 function sanitizeStatusText(text: string): string {
 	return text
@@ -148,8 +132,14 @@ function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
 				const branch = footerData.getGitBranch();
 				if (branch) pwd = `${pwd} (${branch})`;
 
+				let sessionLine = "";
 				const sessionName = ctx.sessionManager.getSessionName();
-				if (sessionName) pwd = `${pwd} • ${sessionName}`;
+				if (sessionName) {
+					sessionLine = `Session: ${sessionName}`;
+					if (visibleWidth(sessionLine) > width) {
+						sessionLine = truncateToWidth(sessionLine, width, "...");
+					}
+				}
 
 				if (visibleWidth(pwd) > width) {
 					pwd = truncateToWidth(pwd, width, "...");
@@ -216,7 +206,9 @@ function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
 				const dimStatsLeft = theme.fg("dim", statsLeft);
 				const remainder = statsLine.slice(statsLeft.length);
 				const dimRemainder = theme.fg("dim", remainder);
-				const lines = [theme.fg("dim", pwd), dimStatsLeft + dimRemainder];
+				const lines = sessionLine
+					? [theme.fg("dim", sessionLine), theme.fg("dim", pwd), dimStatsLeft + dimRemainder]
+					: [theme.fg("dim", pwd), dimStatsLeft + dimRemainder];
 
 				const extensionStatuses = footerData.getExtensionStatuses();
 				if (extensionStatuses.size > 0) {
@@ -234,7 +226,17 @@ function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
 }
 
 export default function (pi: ExtensionAPI) {
+	pi.on("after_provider_response", (event) => {
+		updatePlanUsage(event.headers);
+	});
+
 	pi.on("session_start", async (_event, ctx) => {
 		installFooter(pi, ctx);
+	});
+
+	pi.on("session_shutdown", async (_event, ctx) => {
+		requestRender = null;
+		if (!ctx.hasUI) return;
+		ctx.ui.setFooter(undefined);
 	});
 }
