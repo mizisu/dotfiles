@@ -1,29 +1,19 @@
 import type {
   ExtensionAPI,
-  FindToolDetails,
-  FindToolInput,
-  GrepToolDetails,
-  GrepToolInput,
   LsToolDetails,
   LsToolInput,
   TruncationResult,
 } from "@mariozechner/pi-coding-agent";
 import {
   createBashTool,
-  createEditTool,
-  createFindTool,
-  createGrepTool,
   createLocalBashOperations,
   createLsTool,
-  createWriteTool,
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
   formatSize,
   truncateHead,
 } from "@mariozechner/pi-coding-agent";
 import { spawnSync } from "node:child_process";
-import { stat } from "node:fs/promises";
-import * as path from "node:path";
 
 const REWRITE_TIMEOUT_MS = 2000;
 
@@ -62,10 +52,6 @@ function rewriteCommand(command: string): string | undefined {
   return undefined;
 }
 
-function resolveToolPath(cwd: string, filePath: string): string {
-  return path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
-}
-
 function renderTruncatedText(truncation: TruncationResult): string {
   if (!truncation.truncated) return truncation.content || "(no output)";
 
@@ -98,37 +84,6 @@ async function runRtkTextCommand(
   }
 }
 
-function buildRtkGrepArgs(input: GrepToolInput): string[] {
-  const args = ["grep"];
-
-  if (input.limit !== undefined) args.push("--max", String(input.limit));
-
-  args.push(input.pattern);
-  args.push(input.path ?? ".");
-
-  if (input.glob) args.push("--glob", input.glob);
-  if (input.ignoreCase) args.push("-i");
-  if (input.literal) args.push("-F");
-  if (input.context !== undefined) args.push("-C", String(input.context));
-
-  return args;
-}
-
-function buildRtkFindArgs(input: FindToolInput): string[] {
-  return ["find", input.pattern, input.path ?? "."];
-}
-
-async function pathIsFile(cwd: string, targetPath: string | undefined): Promise<boolean> {
-  if (!targetPath) return false;
-
-  try {
-    const info = await stat(resolveToolPath(cwd, targetPath));
-    return info.isFile();
-  } catch {
-    return false;
-  }
-}
-
 function buildRtkLsArgs(input: LsToolInput): string[] {
   const args = ["ls"];
   if (input.path) args.push(input.path);
@@ -137,7 +92,6 @@ function buildRtkLsArgs(input: LsToolInput): string[] {
 
 export default function (pi: ExtensionAPI) {
   const cwd = process.cwd();
-
   const bashTool = createBashTool(cwd, {
     spawnHook: ({ command, cwd, env }) => ({
       command: rewriteCommand(command) ?? command,
@@ -145,10 +99,6 @@ export default function (pi: ExtensionAPI) {
       env,
     }),
   });
-  const editTool = createEditTool(cwd);
-  const writeTool = createWriteTool(cwd);
-  const grepTool = createGrepTool(cwd);
-  const findTool = createFindTool(cwd);
   const lsTool = createLsTool(cwd);
   const localBashOperations = createLocalBashOperations();
 
@@ -163,60 +113,6 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerTool({
     ...bashTool,
-  });
-
-  pi.registerTool({
-    ...editTool,
-  });
-
-  pi.registerTool({
-    ...writeTool,
-  });
-
-  pi.registerTool({
-    ...grepTool,
-    async execute(toolCallId, params: GrepToolInput, signal, onUpdate, ctx) {
-      if (await pathIsFile(ctx.cwd, params.path)) {
-        return grepTool.execute(toolCallId, params, signal, onUpdate);
-      }
-
-      const result = await runRtkTextCommand(pi, buildRtkGrepArgs(params), signal);
-      if (!result) {
-        return grepTool.execute(toolCallId, params, signal, onUpdate);
-      }
-
-      const details: GrepToolDetails = {
-        truncation: result.truncation,
-      };
-
-      return {
-        content: [{ type: "text", text: result.text }],
-        details,
-      };
-    },
-  });
-
-  pi.registerTool({
-    ...findTool,
-    async execute(toolCallId, params: FindToolInput, signal, onUpdate) {
-      if (params.limit !== undefined) {
-        return findTool.execute(toolCallId, params, signal, onUpdate);
-      }
-
-      const result = await runRtkTextCommand(pi, buildRtkFindArgs(params), signal);
-      if (!result) {
-        return findTool.execute(toolCallId, params, signal, onUpdate);
-      }
-
-      const details: FindToolDetails = {
-        truncation: result.truncation,
-      };
-
-      return {
-        content: [{ type: "text", text: result.text }],
-        details,
-      };
-    },
   });
 
   pi.registerTool({
