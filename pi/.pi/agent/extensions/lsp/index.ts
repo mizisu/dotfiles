@@ -16,11 +16,10 @@ import {
   type Focusable,
   type SelectItem,
 } from "@mariozechner/pi-tui";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { spawnSync } from "node:child_process";
 import { resolve, extname, relative, dirname, join } from "node:path";
 import { readFileSync, existsSync, statSync, watch, type FSWatcher } from "node:fs";
-import { execFileSync } from "node:child_process";
 import {
   LSPClient,
   type Diagnostic,
@@ -28,12 +27,11 @@ import {
   type WorkspaceSymbol,
   type WatchedFileChange,
 } from "./client.js";
-import { detectServers } from "./servers.js";
+import { detectServers, type ServerConfig } from "./servers.js";
 
-const TS_EXTS = new Set([".ts", ".tsx", ".js", ".jsx"]);
-const PY_EXTS = new Set([".py"]);
 const FULL_REINDEX_THRESHOLD = 400;
 const GIT_HEAD_POLL_MS = 10000;
+const LSP_SETTLE_MS = 400;
 
 type RepoChangeType = "created" | "changed" | "deleted";
 
@@ -162,11 +160,8 @@ function shouldFullReindex(changes: RepoFileChange[]): boolean {
   return changes.length >= FULL_REINDEX_THRESHOLD || changes.some((c) => isConfigAffectingFile(c.path));
 }
 
-function getLanguage(filePath: string): "typescript" | "python" | null {
-  const ext = extname(filePath);
-  if (TS_EXTS.has(ext)) return "typescript";
-  if (PY_EXTS.has(ext)) return "python";
-  return null;
+function getFileExtension(filePath: string): string {
+  return extname(filePath).toLowerCase();
 }
 
 function fmtDiags(diags: Diagnostic[]): string {
@@ -233,6 +228,55 @@ function symbolAt(root: string, filePath: string, line: number, character: numbe
   } catch { return null; }
 }
 
+interface ClientEntry {
+  client: LSPClient;
+  config: ServerConfig;
+}
+
+interface ClientDiagnostics {
+  name: string;
+  diagnostics: Diagnostic[];
+}
+
+function summarizeClientDiagnostics(groups: ClientDiagnostics[]): string[] {
+  return groups.map(({ name, diagnostics }) => {
+    const errors = diagnostics.filter((diagnostic) => diagnostic.severity === "error").length;
+    const warnings = diagnostics.filter((diagnostic) => diagnostic.severity === "warning").length;
+    const infos = diagnostics.filter((diagnostic) => diagnostic.severity === "info").length;
+    const hints = diagnostics.filter((diagnostic) => diagnostic.severity === "hint").length;
+
+    const parts = [`${errors} error${errors === 1 ? "" : "s"}`];
+    if (warnings > 0) parts.push(`${warnings} warning${warnings === 1 ? "" : "s"}`);
+    if (infos > 0) parts.push(`${infos} info`);
+    if (hints > 0) parts.push(`${hints} hint${hints === 1 ? "" : "s"}`);
+    return `- ${name}: ${parts.join(", ")}`;
+  });
+}
+
+function formatTopDiagnostics(groups: ClientDiagnostics[], maxItems = 6): string {
+  const ranked = groups.flatMap(({ name, diagnostics }) => diagnostics.map((diagnostic) => ({
+    name,
+    diagnostic,
+    weight: diagnostic.severity === "error"
+      ? 0
+      : diagnostic.severity === "warning"
+        ? 1
+        : diagnostic.severity === "info"
+          ? 2
+          : 3,
+  })));
+
+  ranked.sort((a, b) => {
+    if (a.weight !== b.weight) return a.weight - b.weight;
+    if (a.diagnostic.line !== b.diagnostic.line) return a.diagnostic.line - b.diagnostic.line;
+    return a.diagnostic.character - b.diagnostic.character;
+  });
+
+  return ranked.slice(0, maxItems)
+    .map(({ name, diagnostic }) => `  ${name} ${relative(process.cwd(), diagnostic.file) || diagnostic.file}:${diagnostic.line}:${diagnostic.character} [${diagnostic.severity}] ${diagnostic.message}`)
+    .join("\n");
+}
+
 export default function (pi: ExtensionAPI) {
   let clients: LSPClient[] = [];
   const diagnosticsOnlyClients = new Set<LSPClient>();
@@ -261,41 +305,123 @@ export default function (pi: ExtensionAPI) {
     ctx.ui.setStatus("lsp", ctx.ui.theme.fg("dim", `LSP: ${alive.map((c) => c.name).join(", ")}${suffix}`));
   }
 
-  async function getClient(filePath: string, forDiagnostics = false): Promise<LSPClient | null> {
-    const lang = getLanguage(filePath);
-    if (!lang) return null;
+  const clientConfigs = new Map<LSPClient, ServerConfig>();
+
+  async function getClientEntries(filePath: string): Promise<ClientEntry[]> {
     if (initPromise) await initPromise;
+    const ext = getFileExtension(filePath);
+    return clients.flatMap((client) => {
+      const config = clientConfigs.get(client);
+      if (!config || !config.extensions.includes(ext)) return [];
+      return [{ client, config }];
+    });
+  }
+
+  async function getAliveClientEntries(filePath: string): Promise<ClientEntry[]> {
+    return (await getClientEntries(filePath)).filter(({ client }) => client.isAlive());
+  }
+
+  async function getClient(filePath: string, forDiagnostics = false): Promise<LSPClient | null> {
+    const aliveEntries = await getAliveClientEntries(filePath);
+    if (aliveEntries.length === 0) return null;
     if (forDiagnostics) {
-      return clients.find((c) => c.language === lang && c.isAlive() && diagnosticsOnlyClients.has(c))
-        ?? clients.find((c) => c.language === lang && c.isAlive()) ?? null;
+      return aliveEntries.find(({ config }) => config.diagnostics !== false && config.diagnosticsOnly)?.client
+        ?? aliveEntries.find(({ config }) => config.diagnostics !== false)?.client
+        ?? null;
     }
-    return clients.find((c) => c.language === lang && c.isAlive() && !diagnosticsOnlyClients.has(c))
-      ?? clients.find((c) => c.language === lang && c.isAlive()) ?? null;
+    return aliveEntries.find(({ config }) => !config.diagnosticsOnly)?.client
+      ?? aliveEntries[0]?.client
+      ?? null;
+  }
+
+  async function notifyEntriesChanged(entries: ClientEntry[], filePath: string) {
+    const absPath = resolve(projectRoot, filePath);
+    await Promise.allSettled(
+      entries
+        .filter(({ client }) => client.isAlive())
+        .map(({ client }) => client.notifyChanged(absPath)),
+    );
+  }
+
+  async function collectDiagnostics(filePath: string): Promise<ClientDiagnostics[]> {
+    const entries = (await getClientEntries(filePath)).filter(({ config }) => config.diagnostics !== false);
+    if (entries.length === 0) return [];
+
+    const missing = [...new Set(entries.filter(({ client }) => !client.isAlive()).map(({ config }) => config.name))];
+    if (missing.length > 0) {
+      throw new Error(`Missing LSP server(s) for ${filePath}: ${missing.join(", ")}.`);
+    }
+
+    const absPath = resolve(projectRoot, filePath);
+    await notifyEntriesChanged(entries, filePath);
+    return Promise.all(entries.map(async ({ client, config }) => ({
+      name: config.name,
+      diagnostics: await client.refreshDiagnostics(absPath, LSP_SETTLE_MS),
+    })));
+  }
+
+  async function runAutoFix(filePath: string): Promise<string[]> {
+    const entries = await getClientEntries(filePath);
+    if (entries.length === 0) return [];
+
+    const fixEntries = entries.filter(({ config }) => (config.fixOnSaveKinds?.length ?? 0) > 0);
+    const formatEntries = entries.filter(({ config }) => !!config.formatOnSave);
+    const requiredEntries = [...fixEntries, ...formatEntries];
+    const missing = [...new Set(requiredEntries.filter(({ client }) => !client.isAlive()).map(({ config }) => config.name))];
+    if (missing.length > 0) {
+      throw new Error(`Missing LSP auto-fix server(s) for ${filePath}: ${missing.join(", ")}.`);
+    }
+
+    const applied = new Set<string>();
+    const absPath = resolve(projectRoot, filePath);
+
+    await notifyEntriesChanged(entries, filePath);
+    await new Promise((resolve) => setTimeout(resolve, LSP_SETTLE_MS));
+
+    for (const { client, config } of fixEntries) {
+      const changed = await client.applyCodeActionKinds(absPath, config.fixOnSaveKinds ?? []);
+      if (!changed) continue;
+      applied.add(config.name);
+      await notifyEntriesChanged(entries, filePath);
+      await new Promise((resolve) => setTimeout(resolve, LSP_SETTLE_MS));
+    }
+
+    for (const { client, config } of formatEntries) {
+      const changed = await client.formatDocument(absPath);
+      if (!changed) continue;
+      applied.add(config.name);
+      await notifyEntriesChanged(entries, filePath);
+      await new Promise((resolve) => setTimeout(resolve, LSP_SETTLE_MS));
+    }
+
+    return [...applied];
   }
 
   function startServers(cwd: string) {
     projectRoot = cwd;
-    jsFormatters = null;
     const configs = detectServers(projectRoot);
     if (configs.length === 0) {
       clients = [];
+      clientConfigs.clear();
       initPromise = Promise.resolve();
       if (currentCtx) updateStatus(currentCtx);
       return;
     }
 
     diagnosticsOnlyClients.clear();
+    clientConfigs.clear();
     clients = configs.map((config) => {
       const wsRoot = config.workspaceSubdir ? resolve(projectRoot, config.workspaceSubdir) : projectRoot;
-      const client = new LSPClient(config.name, config.command, config.args, wsRoot, config.language, config.env, config.settings);
+      const client = new LSPClient(config.name, config.command, config.args, wsRoot, config.language, config.env, config.settings, config.sendDidSave ?? true);
+      clientConfigs.set(client, config);
       if (config.diagnosticsOnly) diagnosticsOnlyClients.add(client);
       return client;
     });
 
     initPromise = (async () => {
-      await Promise.allSettled(clients.map(async (c) => {
-        try { await c.waitReady(); }
-        catch (e) { console.error(`[lsp] ${c.name} failed: ${e}`); }
+      await Promise.allSettled(clients.map(async (client) => {
+        try { await client.waitReady(); }
+        catch (e) { console.error(`[lsp] ${client.name} failed: ${e}`); }
       }));
       if (currentCtx) updateStatus(currentCtx);
     })();
@@ -304,6 +430,7 @@ export default function (pi: ExtensionAPI) {
   function forceShutdownServers() {
     for (const client of clients) client.terminate();
     clients = [];
+    clientConfigs.clear();
     diagnosticsOnlyClients.clear();
     initPromise = null;
     if (currentCtx) updateStatus(currentCtx);
@@ -334,12 +461,13 @@ export default function (pi: ExtensionAPI) {
     }
 
     for (const change of changes) {
-      const lang = getLanguage(change.path);
-      if (!lang) continue;
+      const ext = getFileExtension(change.path);
+      if (!ext) continue;
 
       const absPath = resolve(projectRoot, change.path);
       for (const client of clients) {
-        if (!client.isAlive() || client.language !== lang) continue;
+        const config = clientConfigs.get(client);
+        if (!client.isAlive() || !config || !config.extensions.includes(ext)) continue;
         byClient.get(client)?.push({ path: absPath, type: change.type });
       }
     }
@@ -350,21 +478,21 @@ export default function (pi: ExtensionAPI) {
         .map(([client, entries]) => client.notifyWatchedFilesChanged(entries)),
     );
 
-    // Warm one file per language to trigger lazy index refresh in some servers.
-    const warmupByLang = new Map<string, string>();
+    const warmupByClient = new Map<LSPClient, string>();
     for (const change of changes) {
       if (change.type === "deleted") continue;
-      const lang = getLanguage(change.path);
-      if (!lang || warmupByLang.has(lang)) continue;
-      warmupByLang.set(lang, resolve(projectRoot, change.path));
+      const ext = getFileExtension(change.path);
+      if (!ext) continue;
+      const absPath = resolve(projectRoot, change.path);
+      for (const client of clients) {
+        const config = clientConfigs.get(client);
+        if (!client.isAlive() || !config || !config.extensions.includes(ext) || warmupByClient.has(client)) continue;
+        warmupByClient.set(client, absPath);
+      }
     }
 
     await Promise.allSettled(
-      [...warmupByLang.entries()].map(async ([lang, absPath]) => {
-        const client = clients.find((c) => c.language === lang && c.isAlive());
-        if (!client) return;
-        await client.notifyChanged(absPath);
-      }),
+      [...warmupByClient.entries()].map(([client, absPath]) => client.notifyChanged(absPath)),
     );
   }
 
@@ -497,112 +625,72 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  pi.on("session_shutdown", () => {
+  pi.on("session_shutdown", async () => {
     stopGitHeadTracking();
     projectRoot = "";
-    forceShutdownServers();
+    await shutdownServers();
     currentCtx = null;
     lastGitHead = null;
     reindexing = false;
   });
 
-  // ── Format-on-write ────────────────────────────────────────
-
-  type Formatter = { command: string; args: (file: string) => string[] };
-
-  const PY_FORMATTERS: Record<string, Formatter[]> = {
-    ".py": [
-      { command: "uvx", args: (f) => ["ruff", "check", "--fix", f] },
-      { command: "uvx", args: (f) => ["ruff", "format", f] },
-    ],
-    ".pyi": [
-      { command: "uvx", args: (f) => ["ruff", "check", "--fix", f] },
-      { command: "uvx", args: (f) => ["ruff", "format", f] },
-    ],
-  };
-
-  function detectJsFormatter(): Record<string, Formatter[]> {
-    if (!projectRoot) return {};
-    const biomeNames = ["biome.json", "biome.jsonc"];
-    const prettierNames = [".prettierrc", ".prettierrc.json", ".prettierrc.js", ".prettierrc.cjs", ".prettierrc.mjs", ".prettierrc.yml", ".prettierrc.yaml", ".prettierrc.toml", "prettier.config.js", "prettier.config.cjs", "prettier.config.mjs"];
-    const hasBiome = biomeNames.some((n) => existsSync(resolve(projectRoot, n)));
-    const hasPrettier = prettierNames.some((n) => existsSync(resolve(projectRoot, n)));
-
-    let fmt: Formatter | null = null;
-    if (hasBiome) fmt = { command: "npx", args: (f) => ["@biomejs/biome", "format", "--write", f] };
-    else if (hasPrettier) fmt = { command: "npx", args: (f) => ["prettier", "--write", f] };
-
-    if (!fmt) return {};
-    const result: Record<string, Formatter[]> = {};
-    for (const ext of [".ts", ".tsx", ".js", ".jsx"]) result[ext] = [fmt];
-    return result;
-  }
-
-  let jsFormatters: Record<string, Formatter[]> | null = null;
-
-  function getFormatters(): Record<string, Formatter[]> {
-    if (!jsFormatters) jsFormatters = detectJsFormatter();
-    return { ...PY_FORMATTERS, ...jsFormatters };
-  }
-
-  function formatFile(absPath: string): boolean {
-    const ext = extname(absPath).toLowerCase();
-    const formatters = getFormatters()[ext];
-    if (!formatters || formatters.length === 0) return false;
-    let ok = true;
-    for (const formatter of formatters) {
-      try {
-        execFileSync(formatter.command, formatter.args(absPath), {
-          timeout: 10000,
-          stdio: "pipe",
-        });
-      } catch {
-        ok = false;
-      }
-    }
-    return ok;
-  }
-
-  // ── Auto-diagnostics after edit/write ─────────────────────
+  // ── LSP auto-fix + diagnostics after edit/write ──────────
 
   pi.on("tool_result", async (event) => {
     if (event.toolName !== "edit" && event.toolName !== "write") return;
     if (event.isError) return;
+
     const filePath = (event.input as any)?.path;
     if (!filePath) return;
 
-    const absPath = resolve(projectRoot, filePath);
+    const entries = await getClientEntries(filePath);
+    if (entries.length === 0) return;
 
-    // Format-on-write
-    const formatted = formatFile(absPath);
-
-    const client = await getClient(filePath, true);
-    if (!client) return;
-
-    await client.notifyChanged(absPath);
-    await new Promise((r) => setTimeout(r, 2000));
-
-    const errors = client.getErrorDiagnostics(absPath);
     const original = event.content
-      .filter((c): c is { type: "text"; text: string } => c.type === "text")
-      .map((c) => c.text).join("");
+      .filter((content): content is { type: "text"; text: string } => content.type === "text")
+      .map((content) => content.text)
+      .join("");
 
-    if (errors.length === 0) {
+    try {
+      const autoFixers = await runAutoFix(filePath);
+      const diagnostics = await collectDiagnostics(filePath);
+      const summaryLines = summarizeClientDiagnostics(diagnostics);
+      const topDiagnostics = formatTopDiagnostics(diagnostics);
+      const errorCount = diagnostics.reduce((sum, { diagnostics }) => sum + diagnostics.filter((diagnostic) => diagnostic.severity === "error").length, 0);
+      const warningCount = diagnostics.reduce((sum, { diagnostics }) => sum + diagnostics.filter((diagnostic) => diagnostic.severity === "warning").length, 0);
+
+      let text = original;
+      if (autoFixers.length > 0) {
+        text += `\n\nApplied LSP auto-fixes: ${autoFixers.join(", ")}.`;
+        text += "\nThe file changed again after the tool call. Read it before relying on exact text matches.";
+      }
+
+      if (diagnostics.length === 0) {
+        text += "\n\nNo LSP diagnostics were configured for this file.";
+        return { content: [{ type: "text" as const, text }] };
+      }
+
+      if (errorCount === 0 && warningCount === 0) {
+        text += `\n\nNo LSP errors from ${diagnostics.map(({ name }) => name).join(", ")}.`;
+        return { content: [{ type: "text" as const, text }] };
+      }
+
+      text += `\n\nLSP diagnostics for ${filePath}:\n${summaryLines.join("\n")}`;
+      if (topDiagnostics) {
+        text += `\n\nTop issues:\n${topDiagnostics}`;
+      }
+      text += "\n\nUse these diagnostics instead of running biome/eslint/pyright/ruff directly.";
+
+      return { content: [{ type: "text" as const, text }] };
+    } catch (e: any) {
       return {
         content: [{
           type: "text" as const,
-          text: `${original}\n\n✅ No LSP errors from ${client.name}.`,
+          text: `${original}\n\nLSP auto-fix/diagnostics failed for ${filePath}: ${e.message}`,
         }],
+        isError: true,
       };
     }
-
-    const errorText = errors.map((e) => `  Line ${e.line}: ${e.message}`).join("\n");
-    return {
-      content: [{
-        type: "text" as const,
-        text: `${original}\n\n⚠️ LSP Diagnostics (${errors.length} error${errors.length > 1 ? "s" : ""}) from ${client.name}:\n${errorText}\n\nPlease fix these errors.`,
-      }],
-    };
   });
 
   // ── Tools ─────────────────────────────────────────────────
@@ -668,23 +756,35 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "get_diagnostics",
     label: "Get Diagnostics",
-    description: "Get type errors, warnings, and diagnostics for a file from the LSP server (pyright for Python, tsserver for TypeScript). Note: edit/write tools already report errors automatically — use this only to check files you haven't just modified.",
-    promptSnippet: "Get type errors, warnings, and diagnostics for a file from the LSP server (pyright for Python, tsserver for TypeScript). Note: edit/write tools already report errors automatically — use this only to check files you haven't just modified.",
+    description: "Get type errors, warnings, and diagnostics for a file from the configured LSP servers (for example pyright, ruff, typescript, biome, eslint). Note: edit/write tools already report diagnostics automatically — use this only to check files you haven't just modified.",
+    promptSnippet: "Get type errors, warnings, and diagnostics for a file from the configured LSP servers (for example pyright, ruff, typescript, biome, eslint). Note: edit/write tools already report diagnostics automatically — use this only to check files you haven't just modified.",
     parameters: Type.Object({
       path: Type.String({ description: "File path (relative to project root)" }),
     }),
     async execute(_id, params) {
       const filePath = params.path.replace(/^@/, "");
-      const client = await getClient(filePath, true);
-      if (!client) return { content: [{ type: "text", text: `No LSP server for ${filePath}.` }], isError: true };
       try {
-        const absPath = resolve(projectRoot, filePath);
-        await client.notifyChanged(absPath);
-        await new Promise((r) => setTimeout(r, 2000));
-        const diags = client.getDiagnostics(absPath);
-        const errors = diags.filter((d) => d.severity === "error").length;
-        const warnings = diags.filter((d) => d.severity === "warning").length;
-        return { content: [{ type: "text", text: `Diagnostics for ${filePath}: ${errors} error(s), ${warnings} warning(s)\n\n${fmtDiags(diags)}` }], details: { errors, warnings } };
+        const diagnostics = await collectDiagnostics(filePath);
+        if (diagnostics.length === 0) {
+          return { content: [{ type: "text", text: `No LSP diagnostics configured for ${filePath}.` }] };
+        }
+
+        const allDiagnostics = diagnostics.flatMap(({ diagnostics }) => diagnostics);
+        const errors = allDiagnostics.filter((diagnostic) => diagnostic.severity === "error").length;
+        const warnings = allDiagnostics.filter((diagnostic) => diagnostic.severity === "warning").length;
+        const summary = summarizeClientDiagnostics(diagnostics).join("\n");
+        const detailText = diagnostics
+          .filter(({ diagnostics }) => diagnostics.length > 0)
+          .map(({ name, diagnostics }) => `${name}:\n${fmtDiags(diagnostics)}`)
+          .join("\n\n");
+
+        return {
+          content: [{
+            type: "text",
+            text: `Diagnostics for ${filePath}: ${errors} error(s), ${warnings} warning(s)\n\n${summary}${detailText ? `\n\n${detailText}` : ""}`,
+          }],
+          details: { errors, warnings },
+        };
       } catch (e: any) {
         return { content: [{ type: "text", text: `LSP error: ${e.message}` }], isError: true };
       }
