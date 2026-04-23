@@ -9,16 +9,29 @@ type MarkdownToken = {
 };
 
 type RenderToken = (token: unknown, width: number, nextTokenType?: string, styleContext?: unknown) => string[];
+type RenderMarkdown = (width: number) => string[];
 
 type PatchState = {
-	original: RenderToken;
-	wrapper: RenderToken;
+	originalRenderToken: RenderToken;
+	renderTokenWrapper: RenderToken;
+	originalRender: RenderMarkdown;
+	renderWrapper: RenderMarkdown;
 	renderMermaid: (token: MarkdownToken, width: number, nextTokenType?: string) => string[] | null;
+	resumeHistoryRenderActive: boolean;
+	skipMermaidMarkdown: WeakSet<object>;
 };
 
 const PATCH_STATE_KEY = Symbol.for("pi.mermaid.inline.patch");
 const MERMAID_INLINE_OVERFLOW_COLS = 24;
 const MERMAID_INLINE_OVERFLOW_RATIO = 1.2;
+
+function getMarkdownProto() {
+	return Markdown.prototype as Markdown.prototype & {
+		render?: RenderMarkdown;
+		renderToken?: RenderToken;
+		[PATCH_STATE_KEY]?: PatchState;
+	};
+}
 
 function renderMermaidBlock(token: MarkdownToken, width: number, nextTokenType?: string): string[] | null {
 	if (token.type !== "code" || token.lang !== "mermaid" || typeof token.text !== "string") {
@@ -50,11 +63,15 @@ function renderMermaidBlock(token: MarkdownToken, width: number, nextTokenType?:
 	}
 }
 
+function setResumeHistoryRenderActive(active: boolean): void {
+	const state = getMarkdownProto()[PATCH_STATE_KEY];
+	if (state) {
+		state.resumeHistoryRenderActive = active;
+	}
+}
+
 function installMarkdownMermaidPatch(): void {
-	const proto = Markdown.prototype as Markdown.prototype & {
-		renderToken?: RenderToken;
-		[PATCH_STATE_KEY]?: PatchState;
-	};
+	const proto = getMarkdownProto();
 
 	const existing = proto[PATCH_STATE_KEY];
 	if (existing) {
@@ -62,40 +79,55 @@ function installMarkdownMermaidPatch(): void {
 		return;
 	}
 
-	const original = proto.renderToken;
-	if (typeof original !== "function") {
+	const originalRenderToken = proto.renderToken;
+	const originalRender = proto.render;
+	if (typeof originalRenderToken !== "function" || typeof originalRender !== "function") {
 		return;
 	}
 
 	const state: PatchState = {
-		original,
-		wrapper: function (this: unknown, token: unknown, width: number, nextTokenType?: string, styleContext?: unknown) {
+		originalRenderToken,
+		renderTokenWrapper: function (this: unknown, token: unknown, width: number, nextTokenType?: string, styleContext?: unknown) {
+			if (this && typeof this === "object" && state.skipMermaidMarkdown.has(this as object)) {
+				return state.originalRenderToken.call(this, token, width, nextTokenType, styleContext);
+			}
+
 			const custom = state.renderMermaid(token as MarkdownToken, width, nextTokenType);
 			if (custom) {
 				return custom;
 			}
-			return state.original.call(this, token, width, nextTokenType, styleContext);
+			return state.originalRenderToken.call(this, token, width, nextTokenType, styleContext);
+		},
+		originalRender,
+		renderWrapper: function (this: unknown, width: number) {
+			if (state.resumeHistoryRenderActive && this && typeof this === "object") {
+				state.skipMermaidMarkdown.add(this as object);
+			}
+			return state.originalRender.call(this, width);
 		},
 		renderMermaid: renderMermaidBlock,
+		resumeHistoryRenderActive: false,
+		skipMermaidMarkdown: new WeakSet<object>(),
 	};
 
 	proto[PATCH_STATE_KEY] = state;
-	proto.renderToken = state.wrapper;
+	proto.render = state.renderWrapper;
+	proto.renderToken = state.renderTokenWrapper;
 }
 
 function uninstallMarkdownMermaidPatch(): void {
-	const proto = Markdown.prototype as Markdown.prototype & {
-		renderToken?: RenderToken;
-		[PATCH_STATE_KEY]?: PatchState;
-	};
-
+	const proto = getMarkdownProto();
 	const state = proto[PATCH_STATE_KEY];
 	if (!state) {
 		return;
 	}
 
-	if (proto.renderToken === state.wrapper) {
-		proto.renderToken = state.original;
+	if (proto.render === state.renderWrapper) {
+		proto.render = state.originalRender;
+	}
+
+	if (proto.renderToken === state.renderTokenWrapper) {
+		proto.renderToken = state.originalRenderToken;
 	}
 
 	delete proto[PATCH_STATE_KEY];
@@ -103,6 +135,15 @@ function uninstallMarkdownMermaidPatch(): void {
 
 export default function (pi: ExtensionAPI) {
 	installMarkdownMermaidPatch();
+
+	pi.on("session_start", async (event) => {
+		setResumeHistoryRenderActive(event.reason === "resume");
+	});
+
+	pi.on("agent_start", async () => {
+		setResumeHistoryRenderActive(false);
+	});
+
 	pi.on("session_shutdown", async () => {
 		uninstallMarkdownMermaidPatch();
 	});
