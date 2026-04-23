@@ -8,6 +8,14 @@ disable-model-invocation: true
 
 This guide defines code style and design decisions for the lemonbase frontend codebase. Follow these patterns when writing new code or refactoring existing code.
 
+## Companion Skills
+
+When this skill is activated, compose it with sibling skills in the same `agent/skills` directory.
+
+- Always read `../simplicity-guard/SKILL.md`.
+- If they exist, also read `../lb-design/SKILL.md`, `../lb-lds/SKILL.md`, and `../lb-react-rules/SKILL.md`.
+- Treat those skills as additive constraints alongside this guide. If two rules seem to conflict, prefer the rule that is more specific to the code you are changing and surface any real conflict explicitly.
+
 ---
 
 ## TypeScript Foundations
@@ -32,7 +40,9 @@ interface Props {
 
 ### Let the compiler work for you
 
-Avoid redundant type annotations when TypeScript can infer them. For `useForm`, `useState`, and similar generics, let the `defaultValues` or initial value drive the type.
+Prefer inferred types over explicit annotations. Add a type only when it communicates something inference cannot.
+
+Use `ReturnType<typeof fn>` when you need a function's return type, `satisfies` when you want to validate shape without widening inference, and `as const` when you need to preserve literal values.
 
 ```tsx
 // ✅ — inferred from defaultValues + resolver
@@ -41,9 +51,35 @@ const { control, handleSubmit } = useForm({
   resolver: zodResolver(formSchema()),
 });
 
+// ✅ — preserve inference while checking the contract
+const statusOptions = [
+  { value: 'draft', label: t`임시 저장` },
+  { value: 'submitted', label: t`제출됨` },
+] as const satisfies ReadonlyArray<{ value: string; label: string }>;
+
+// ✅ — reuse a function's return type without re-declaring it
+type InferredFormValues = ReturnType<typeof getDefaultValues>;
+
 // ❌ — manually duplicating what the compiler already knows
 type FormValues = z.infer<ReturnType<typeof formSchema>>;
 const { control, handleSubmit } = useForm<FormValues>({ ... });
+```
+
+### Use type guards instead of `as`
+
+Avoid `as`. A cast is a promise to the compiler that may not be true at runtime. Prefer type guards or discriminated unions. Only use `as` when external library type limits make it unavoidable.
+
+```tsx
+// ✅
+function isPerson(value: unknown): value is Person {
+  return typeof value === 'object' && value !== null && 'entityId' in value;
+}
+
+if (!isPerson(payload)) return;
+showPerson(payload);
+
+// ❌
+showPerson(payload as Person);
 ```
 
 ### Model the domain accurately
@@ -90,6 +126,19 @@ body: z.object({
 }),
 ```
 
+### Narrow nullable values before access
+
+Do not use `?.` on values that are not nullable. When a value is nullable, narrow it first with an early return or type guard, then access it normally.
+
+```tsx
+// ✅
+if (!person) return null;
+return <UserProfile person={person} avatarUrl={person.avatarUrl} />;
+
+// ❌ — hides that `person` should be narrowed first
+return <UserProfile person={person} avatarUrl={person?.avatarUrl} />;
+```
+
 ### Reuse enum TypeMaps
 
 When an enum already has a metadata map with translated labels (e.g. `XxxTypeMap[value].text`), use `getEnumValues` + `.map()` to generate options. Don't manually duplicate the labels.
@@ -134,6 +183,12 @@ When an export loses its last consumer, remove it. Unused exports are dead code 
 Be deliberate about import direction. When module A depends on B and B starts to depend on A, extract the shared piece into a third module rather than creating a cycle.
 
 ---
+
+## React Rules
+
+### Read the shared React rules first
+
+Before writing or editing a React component, read `../lb-react-rules/SKILL.md` if it exists and apply it together with this guide. This is already part of the companion-skill flow above, so treat it as an automatic cross-reference rather than an optional reminder.
 
 ## Component Design
 
@@ -378,6 +433,19 @@ Don't memoize speculatively. Add `useMemo` or `useCallback` only after identifyi
 
 Most components re-render cheaply. Unnecessary memoization adds cognitive overhead and hides the true cost profile of the code.
 
+### Avoid O(m×n) nested scans
+
+Do not call `.find()`, `.includes()`, `.some()`, or `.filter()` inside `.map()`, `.filter()`, or `.forEach()` over another collection unless the data is obviously tiny and measurement shows it does not matter. Convert one side to a `Map` or `Set` first.
+
+```tsx
+// ✅ — precompute lookup once
+const selectedIdSet = new Set(selectedIds);
+const selectedPeople = people.filter(person => selectedIdSet.has(person.entityId));
+
+// ❌ — repeated linear scan inside another loop
+const selectedPeople = people.filter(person => selectedIds.includes(person.entityId));
+```
+
 ---
 
 ## Data Fetching & API Layer
@@ -402,9 +470,26 @@ function AdminPage() {
 
 ### Contracts define the API shape
 
-Each API endpoint gets a contract file with Zod schemas. The contract is the single source of truth for path, params, query, body, and response shape.
+Define every endpoint with `createQueryAPI` or `createMutationAPI` plus Zod schemas. The contract is the single source of truth for path, params, query, body, and response shape.
+
+Zod schemas and TypeScript types must always use camelCase keys. Do not manually camelize or decamelize payloads — the axios interceptor already applies `decamelizeKeys` for requests and `camelcase-keys` for responses.
 
 ```tsx
+export const getTemplateFoldersAPI = createQueryAPI({
+  method: 'GET',
+  path: '/api/folders/template/',
+  response: z.object({
+    folders: z.array(
+      z.object({
+        entityId: z.uuid(),
+        name: z.string(),
+        parentEntityId: z.uuid().nullable(),
+        sortOrder: z.number(),
+      }),
+    ),
+  }),
+});
+
 export const createTemplateFolderAPI = createMutationAPI({
   method: 'POST',
   path: '/api/folders/template/',
@@ -477,6 +562,49 @@ const { control } = useForm({
 
 // ❌ — resolver captured at module level; stale i18n
 const FormSchemaResolver = zodResolver(formSchema());
+```
+
+---
+
+## Frontend Architecture
+
+### Prefer links for navigation
+
+If navigation can be represented as a link, use `<Link>`.
+
+When navigation must happen in an `onClick`, preserve Cmd/Ctrl+Click for a new tab and Shift+Click for a new window by using `useAdvancedNavigation` and passing the original event.
+
+```tsx
+// ✅
+<Link to={toPath(AppRoutePaths.REVIEW_CYCLES)}>...</Link>
+
+// ✅
+const advancedNavigate = useAdvancedNavigation();
+
+function handleRowClick(
+  event: React.MouseEvent<HTMLButtonElement>,
+  entityId: string,
+) {
+  advancedNavigate(
+    toPath(AppRoutePaths.REVIEW_CYCLE_DETAIL, { entityId }),
+    event,
+  );
+}
+
+// ❌
+function handleRowClick() {
+  navigate(toPath(AppRoutePaths.REVIEW_CYCLE_DETAIL, { entityId }));
+}
+```
+
+### Translate all user-visible strings
+
+All user-facing strings must be wrapped for LinguiJS translation — JSX text, button labels, empty states, toast messages, validation errors, column titles, and any other UI copy.
+
+For bulk Korean-string migrations, prefer the codemod instead of editing each string by hand.
+
+```bash
+pnpm codemod:translate:run src/path/to/file.tsx
 ```
 
 ---
