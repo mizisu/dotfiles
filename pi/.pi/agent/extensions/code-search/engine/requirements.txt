@@ -1,3 +1,0 @@
-sentence-transformers>=3.0.0
-sqliteai-vector
-einops

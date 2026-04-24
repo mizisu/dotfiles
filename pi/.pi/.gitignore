@@ -1,4 +1,5 @@
 auth.json
 sessions/
 node_modules/
-agent/extensions/mcporter/.env
+agent-backups/
+.env
