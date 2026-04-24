@@ -93,22 +93,10 @@
 				"DB_LOCAL_NAME": "lemonbase_temp"
 			}
 		},
-		"serena": {
-			"type": "local",
-			"command": [
-				"uvx",
-				"--from",
-				"git+https://github.com/oraios/serena",
-				"serena",
-				"start-mcp-server",
-				"--open-web-dashboard=false"
-			],
-			"enabled": true
-		},
-		"": {
-			"type": "local",
-			"command": ["npx", "-y", "@playwriter/install-mcp playwriter@latest"],
-			"enabled": false
-		}
+    "figma": {
+      "type": "remote",
+      "url": "https://mcp.figma.com/mcp",
+      "enabled": false
+    }
 	}
 }
