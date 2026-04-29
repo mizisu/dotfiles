@@ -1,5 +1,6 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { spawn } from "node:child_process";
+import { showFuzzyFilePicker } from "./file-picker.js";
 import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import path from "node:path";
@@ -177,6 +178,18 @@ async function runFzf(files: string[], query: string, limit: number, signal: Abo
 }
 
 export default function (pi: ExtensionAPI) {
+  async function openFilePicker(ctx: ExtensionContext, initialQuery = ""): Promise<void> {
+    if (!ctx.hasUI) return;
+
+    try {
+      const files = await listFiles(pi, ctx.cwd, ctx.signal);
+      await showFuzzyFilePicker(ctx, files, initialQuery);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.ui.notify(`Failed to open file picker: ${message}`, "error");
+    }
+  }
+
   pi.registerTool({
     name: "fuzzy_find",
     label: "Fuzzy Find",
@@ -230,6 +243,27 @@ export default function (pi: ExtensionAPI) {
           details: { query, scope, totalFiles: allFiles.length, searchedFiles: files.length, shown: 0 },
         };
       }
+    },
+  });
+
+  pi.registerShortcut("@", {
+    description: "Open fuzzy file picker",
+    handler: async (ctx) => {
+      await openFilePicker(ctx);
+    },
+  });
+
+  pi.registerCommand("files", {
+    description: "Open fuzzy file picker and insert a selected @path into the editor",
+    handler: async (args, ctx) => {
+      await openFilePicker(ctx, (args ?? "").trim());
+    },
+  });
+
+  pi.registerCommand("fuzzy-find", {
+    description: "Open fuzzy file picker and insert a selected @path into the editor",
+    handler: async (args, ctx) => {
+      await openFilePicker(ctx, (args ?? "").trim());
     },
   });
 }
