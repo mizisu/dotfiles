@@ -1,0 +1,12 @@
+{
+  "name": "pi-lsp-manager",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "vscode-jsonrpc": "^8.2.1"
+  },
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}
