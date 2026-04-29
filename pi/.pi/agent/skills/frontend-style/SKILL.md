@@ -10,10 +10,11 @@ This guide defines code style and design decisions for the lemonbase frontend co
 
 ## Companion Skills
 
-When this skill is activated, compose it with sibling skills in the same `agent/skills` directory.
+When this skill is activated, compose it with the shared guard skill and the current project's Lemonbase skills.
 
-- Always read `../simplicity-guard/SKILL.md`.
-- If they exist, also read `../lb-design/SKILL.md`, `../lb-lds/SKILL.md`, and `../lb-react-rules/SKILL.md`.
+- Always read `../simplicity-guard/SKILL.md` from this skill directory.
+- For companion skills whose names start with `lb-`, read the project-local skill from the active codebase instead of a sibling of this global skill. Locate them from the current project/worktree (`cwd` and ancestors), then read the located absolute file path; do not resolve `lb-*` relative to this `frontend-style` skill directory.
+- If they exist, read the nearest project-local `lb-design`, `lb-lds`, and `lb-react-rules` skills (for example `<active-project-root>/.pi/skills/lb-design/SKILL.md`, `<active-project-root>/.pi/skills/lb-lds/SKILL.md`, `<active-project-root>/.pi/skills/lb-react-rules/SKILL.md`, or their `<active-project-root>/.agents/skills/...` equivalents).
 - Treat those skills as additive constraints alongside this guide. If two rules seem to conflict, prefer the rule that is more specific to the code you are changing and surface any real conflict explicitly.
 
 ---
@@ -188,7 +189,7 @@ Be deliberate about import direction. When module A depends on B and B starts to
 
 ### Read the shared React rules first
 
-Before writing or editing a React component, read `../lb-react-rules/SKILL.md` if it exists and apply it together with this guide. This is already part of the companion-skill flow above, so treat it as an automatic cross-reference rather than an optional reminder.
+Before writing or editing a React component, read the current project's `lb-react-rules` skill if it exists: locate the nearest ancestor containing `.pi/skills/lb-react-rules/SKILL.md` or `.agents/skills/lb-react-rules/SKILL.md`, read that absolute file path, and apply it together with this guide. This is already part of the companion-skill flow above, so treat it as an automatic cross-reference rather than an optional reminder.
 
 ## Component Design
 
