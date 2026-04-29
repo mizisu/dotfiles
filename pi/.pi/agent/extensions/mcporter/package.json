@@ -1,0 +1,8 @@
+{
+  "name": "pi-mcporter",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "mcporter": "^0.8.1"
+  }
+}

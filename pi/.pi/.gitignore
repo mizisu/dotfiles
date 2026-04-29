@@ -3,3 +3,5 @@ sessions/
 node_modules/
 agent-backups/
 .env
+.env.*
+agent/extensions/mcporter/mcporter-cache.json
