@@ -8,7 +8,7 @@
   "smallModel": "gpt-5.4-mini",
   "theme": "catppuccin-macchiato",
   "editorPaddingX": 1,
-  "defaultThinkingLevel": "xhigh",
+  "defaultThinkingLevel": "off",
   "enabledModels": [
     "openai-codex/gpt-5.3-codex-spark",
     "openai-codex/gpt-5.5",
