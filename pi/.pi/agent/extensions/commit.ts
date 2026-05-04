@@ -3,6 +3,9 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { open, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { registerSuccessMessageRenderer } from "./shared/success-message-renderer.js";
+import { resolveMediumModel } from "./shared/model-slots.js";
+import { createCommandWorking } from "./shared/command-working.js";
 
 const MAX_DIFF_CHARS = 180_000;
 const MAX_SESSION_CONTEXT_CHARS = 8_000;
@@ -466,6 +469,50 @@ async function gitRoot(pi: ExtensionAPI, cwd: string): Promise<string | undefine
   return result.stdout.trim();
 }
 
+async function currentBranchName(pi: ExtensionAPI, root: string): Promise<string | undefined> {
+  const result = await git(pi, root, ["branch", "--show-current"], 10_000);
+  if (result.code !== 0) return undefined;
+  return result.stdout.trim() || undefined;
+}
+
+async function upstreamBranchName(pi: ExtensionAPI, root: string): Promise<string | undefined> {
+  const result = await git(pi, root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], 10_000);
+  if (result.code !== 0) return undefined;
+  return result.stdout.trim() || undefined;
+}
+
+async function promptPushAfterCommits(
+  pi: ExtensionAPI,
+  root: string,
+  ctx: any,
+  setStatus: (text: string | undefined) => void,
+): Promise<string> {
+  const branch = await currentBranchName(pi, root);
+  if (!branch) {
+    ctx.ui.notify("Commits created, but push skipped because HEAD is detached", "warning");
+    return "Push: skipped (detached HEAD)";
+  }
+
+  const upstream = await upstreamBranchName(pi, root);
+  const target = upstream ?? `origin/${branch}`;
+  const pushChoice = `Push to ${target} (Recommended)`;
+  const choice = await ctx.ui.select(`Created commits on ${branch}. Push now?`, [pushChoice, "Skip push"]);
+  if (choice !== pushChoice) return "Push: skipped";
+
+  setStatus(`Pushing to ${target}…`);
+  const result = await git(pi, root, upstream ? ["push"] : ["push", "-u", "origin", "HEAD"], 300_000);
+  setStatus(undefined);
+
+  if (result.code !== 0) {
+    const output = resultText(result) || "git push failed";
+    ctx.ui.notify(`Push failed:\n${truncateText(output, 5_000, "[push output truncated]")}`, "error");
+    return `Push: failed to ${target}`;
+  }
+
+  ctx.ui.notify(`Pushed to ${target}`, "info");
+  return `Push: pushed to ${target}`;
+}
+
 async function hasStagedChanges(pi: ExtensionAPI, root: string): Promise<boolean> {
   const result = await git(pi, root, ["diff", "--cached", "--quiet", "--exit-code"], 10_000);
   return result.code === 1;
@@ -521,9 +568,10 @@ async function stageCommitFiles(pi: ExtensionAPI, root: string, commit: PlanComm
   }
 }
 
-async function commitStaged(pi: ExtensionAPI, root: string, commit: PlanCommit) {
+async function commitStaged(pi: ExtensionAPI, root: string, commit: PlanCommit, options?: { noVerify?: boolean }) {
   const args = ["commit", "-m", commit.subject];
   if (commit.description) args.push("-m", commit.description);
+  if (options?.noVerify) args.push("--no-verify");
   return git(pi, root, args, 120_000);
 }
 
@@ -531,12 +579,78 @@ function resultText(result: { stdout: string; stderr: string }): string {
   return [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
 }
 
-async function createPlan(pi: ExtensionAPI, ctx: any, input: string): Promise<string> {
-  if (!ctx.model) throw new Error("No model selected");
-  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
-  if (!auth.ok) throw new Error(auth.error);
-  if (!auth.apiKey) throw new Error(`No API key for ${ctx.model.provider}`);
+type CommitFailureResolution = "committed" | "skip" | "abort" | "fix";
 
+function formatCommitFailurePrompt(index: number, total: number, commit: PlanCommit, errorOutput: string): string {
+  return [
+    `Commit ${index + 1}/${total} failed`,
+    "",
+    commit.subject,
+    "",
+    "Error output:",
+    "```",
+    truncateText(errorOutput || "git commit failed", 5_000, "[error truncated]"),
+    "```",
+    "",
+    "Choose how to continue.",
+  ].join("\n");
+}
+
+async function resolveCommitFailure(
+  pi: ExtensionAPI,
+  root: string,
+  commit: PlanCommit,
+  index: number,
+  total: number,
+  initialErrorOutput: string,
+  diffByPath: Map<string, DiffFile>,
+  ctx: any,
+): Promise<CommitFailureResolution> {
+  let errorOutput = initialErrorOutput || "git commit failed";
+
+  while (true) {
+    await git(pi, root, ["reset", "--quiet", "HEAD"]);
+    const choice = await ctx.ui.select(formatCommitFailurePrompt(index, total, commit, errorOutput), [
+      "Fix with agent (Recommended)",
+      "Retry",
+      "Retry --no-verify",
+      "Skip this commit",
+      "Abort remaining commits",
+    ]);
+
+    if (choice === "Retry" || choice === "Retry --no-verify") {
+      await stageCommitFiles(pi, root, commit, diffByPath, ctx);
+      if (!(await hasStagedChanges(pi, root))) {
+        errorOutput = "Retry produced no staged changes for this commit.";
+        continue;
+      }
+
+      const retry = await commitStaged(pi, root, commit, { noVerify: choice === "Retry --no-verify" });
+      if (retry.code === 0) return "committed";
+      errorOutput = resultText(retry) || "git commit failed";
+      continue;
+    }
+
+    if (choice === "Skip this commit") {
+      await git(pi, root, ["reset", "--quiet", "HEAD"]);
+      ctx.ui.notify(`Skipped commit: ${commit.subject}`, "warning");
+      return "skip";
+    }
+
+    if (choice === "Fix with agent (Recommended)") {
+      await git(pi, root, ["reset", "--quiet", "HEAD"]);
+      pi.sendUserMessage(`The /commit command failed while creating commit \"${commit.subject}\". Please fix the issue, then run /commit again.\n\n\`\`\`\n${errorOutput}\n\`\`\``);
+      return "fix";
+    }
+
+    await git(pi, root, ["reset", "--quiet", "HEAD"]);
+    ctx.ui.notify("Aborted remaining commits", "info");
+    return "abort";
+  }
+}
+
+async function createPlan(ctx: any, input: string): Promise<{ text: string; modelReference: string }> {
+  const resolved = await resolveMediumModel(ctx);
   const messages: Message[] = [{
     role: "user",
     content: [{ type: "text", text: input }],
@@ -544,19 +658,21 @@ async function createPlan(pi: ExtensionAPI, ctx: any, input: string): Promise<st
   } as Message];
 
   const response = await complete(
-    ctx.model,
+    resolved.model,
     { systemPrompt: PLAN_SYSTEM_PROMPT, messages },
-    { apiKey: auth.apiKey, headers: auth.headers },
+    { apiKey: resolved.auth.apiKey, headers: resolved.auth.headers },
   );
 
   if (response.stopReason === "error") throw new Error(response.errorMessage ?? "model error");
   if (response.stopReason === "aborted") throw new Error("analysis aborted");
-  return extractAssistantText(response);
+  return { text: extractAssistantText(response), modelReference: resolved.reference };
 }
 
 export default function commitExtension(pi: ExtensionAPI) {
+  registerSuccessMessageRenderer(pi, "commit");
+
   pi.registerCommand("commit", {
-    description: "Analyze all git changes, split by purpose, and create multiple commits after confirmation.",
+    description: "Analyze all git changes, split by purpose, create commits after confirmation, and optionally push.",
     handler: async (args, ctx) => {
       if (!ctx.hasUI) {
         ctx.ui.notify("/commit requires interactive or RPC UI confirmation", "error");
@@ -569,10 +685,9 @@ export default function commitExtension(pi: ExtensionAPI) {
         return;
       }
 
-      let statusSet = false;
-      const setStatus = (text: string | undefined) => {
-        statusSet = !!text;
-        ctx.ui.setStatus("commit", text);
+      const working = createCommandWorking(ctx, "commit", "Commit");
+      const setStatus = (text: string | undefined, details: string[] = []) => {
+        working.set(text, details);
       };
 
       try {
@@ -624,8 +739,8 @@ export default function commitExtension(pi: ExtensionAPI) {
           `## Diff and untracked previews\n${formatDiffForModel(diffFiles, untrackedPreviews)}`,
         ].filter(Boolean).join("\n\n");
 
-        setStatus("Planning commits…");
-        const planText = await createPlan(pi, ctx, modelInput);
+        setStatus("Planning commits with medium model…");
+        const { text: planText } = await createPlan(ctx, modelInput);
         const rawPlan = extractJsonObject(planText);
         const { commits, warnings } = normalizePlan(rawPlan, changedFiles, diffByPath);
 
@@ -638,7 +753,7 @@ export default function commitExtension(pi: ExtensionAPI) {
 
         const completed: PlanCommit[] = [];
         for (const [index, commit] of commits.entries()) {
-          setStatus(`Committing ${index + 1}/${commits.length}…`);
+          setStatus(`Committing ${index + 1}/${commits.length}…`, [commit.subject]);
           await stageCommitFiles(pi, root, commit, diffByPath, ctx);
 
           if (!(await hasStagedChanges(pi, root))) {
@@ -658,11 +773,14 @@ export default function commitExtension(pi: ExtensionAPI) {
           }
 
           if (result.code !== 0) {
-            await git(pi, root, ["reset", "--quiet", "HEAD"]);
             const errorOutput = resultText(result) || "git commit failed";
             setStatus(undefined);
-            ctx.ui.notify(errorOutput, "error");
-            pi.sendUserMessage(`The /commit command failed while creating commit \"${commit.subject}\". Please fix the issue, then run /commit again.\n\n\`\`\`\n${errorOutput}\n\`\`\``);
+            const resolution = await resolveCommitFailure(pi, root, commit, index, commits.length, errorOutput, diffByPath, ctx);
+            if (resolution === "committed") {
+              completed.push(commit);
+              continue;
+            }
+            if (resolution === "skip") continue;
             return;
           }
 
@@ -677,9 +795,10 @@ export default function commitExtension(pi: ExtensionAPI) {
           return;
         }
 
+        const pushSummary = await promptPushAfterCommits(pi, root, ctx, setStatus);
         const summary = completed.map((commit, index) => `${index + 1}. ${commit.subject}`).join("\n");
         pi.sendMessage(
-          { customType: "commit", content: `✓ Created ${completed.length} commit${completed.length === 1 ? "" : "s"}:\n${summary}`, display: true },
+          { customType: "commit", content: `✓ Created ${completed.length} commit${completed.length === 1 ? "" : "s"}:\n${summary}\n\n${pushSummary}`, display: true },
           { triggerTurn: false },
         );
         ctx.ui.notify(`Created ${completed.length} commit${completed.length === 1 ? "" : "s"}`, "info");
@@ -687,7 +806,7 @@ export default function commitExtension(pi: ExtensionAPI) {
         const message = error instanceof Error ? error.message : String(error);
         ctx.ui.notify(`/commit failed: ${message}`, "error");
       } finally {
-        if (statusSet) ctx.ui.setStatus("commit", undefined);
+        working.clear();
       }
     },
   });
