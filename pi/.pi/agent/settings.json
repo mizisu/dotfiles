@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "0.70.6",
+  "lastChangelogVersion": "0.72.1",
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.5",
   "mediumProvider": "openai-codex",
@@ -8,7 +8,7 @@
   "smallModel": "gpt-5.4-mini",
   "theme": "catppuccin-macchiato",
   "editorPaddingX": 1,
-  "defaultThinkingLevel": "off",
+  "defaultThinkingLevel": "xhigh",
   "enabledModels": [
     "openai-codex/gpt-5.3-codex-spark",
     "openai-codex/gpt-5.5",

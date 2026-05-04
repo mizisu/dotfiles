@@ -8,3 +8,5 @@
   - Treat successful `edit`/`write` results without LSP errors as LSP-clean.
   - Never run repo-wide checks (e.g. `pyright .`, `eslint .`, `ruff .`, full-project formatters) unless explicitly asked; if validation is needed, use the smallest targeted command.
   - If a tool result says a file was formatted, read it before further exact-text edits.
+- When using Mermaid diagrams, keep node/edge labels in English and terminal-friendly.
+  Use a single ` ```mermaid ` code fence directly; do not wrap it inside another markdown/code fence.
