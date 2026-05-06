@@ -18,6 +18,10 @@ import { createCommandWorking } from "./shared/command-working.js";
 const REVIEW_TIMEOUT = 900_000;
 const MAX_ERROR_CHARS = 4_000;
 const PREVIEW_SCROLL_STEP = 8;
+const CODEX_REVIEW_GUARDRAILS = `Review behavior constraints:
+- Do not run manual lint/format/typecheck commands unless explicitly requested, LSP reports errors, or non-LSP tests/validation are required.
+- Treat successful edit/write results without LSP errors as LSP-clean.
+- Never run repo-wide checks (e.g. pyright ., eslint ., ruff ., full-project formatters) unless explicitly asked; if validation is needed, use the smallest targeted command.`;
 
 type ReviewSource = "coderabbit" | "codex";
 type ReviewScope = "base" | "uncommitted" | "commit";
@@ -563,6 +567,12 @@ async function runCodeRabbitReview(pi: ExtensionAPI, config: ReviewConfig): Prom
   }
 }
 
+function buildCodexPrompt(instructions?: string): string {
+  return instructions
+    ? `${CODEX_REVIEW_GUARDRAILS}\n\nAdditional review focus:\n${instructions}`
+    : CODEX_REVIEW_GUARDRAILS;
+}
+
 async function runCodexReview(pi: ExtensionAPI, config: ReviewConfig): Promise<ReviewRunResult> {
   try {
     const args = [
@@ -576,6 +586,8 @@ async function runCodexReview(pi: ExtensionAPI, config: ReviewConfig): Promise<R
     if (config.scope === "base") args.push("--base", config.base!);
     else if (config.scope === "uncommitted") args.push("--uncommitted");
     else args.push("--commit", config.commit!);
+
+    args.push("--", buildCodexPrompt(config.instructions));
 
     const result = await pi.exec("codex", args, { cwd: config.root, timeout: REVIEW_TIMEOUT });
     const raw = result.stdout.trim();
@@ -792,7 +804,7 @@ async function dirtySummary(pi: ExtensionAPI, root: string): Promise<string> {
 
 export default function reviewExtension(pi: ExtensionAPI) {
   pi.registerCommand("review", {
-    description: "Run CodeRabbit and Codex reviews in parallel, then select findings to apply.",
+    description: "Run CodeRabbit and Codex reviews in parallel, then select findings to apply. Pass Codex prompt after --.",
     handler: async (args, ctx) => {
       if (!ctx.hasUI) {
         ctx.ui.notify("/review requires interactive or RPC UI", "error");
@@ -848,6 +860,8 @@ export default function reviewExtension(pi: ExtensionAPI) {
 
         setProgress("Running CodeRabbit + Codex reviews…", [
           `Scope: ${scopeText(config)}`,
+          "Codex guardrail: no manual lint/format/typecheck unless required",
+          ...(config.instructions ? [`Codex focus: ${truncate(config.instructions, 180)}`] : []),
           "CodeRabbit: cr review (up to 15m)",
           `Codex: codex review (${config.codexEffort} reasoning, up to 15m)`,
           "You can keep reading; results will open when both finish or fail.",
