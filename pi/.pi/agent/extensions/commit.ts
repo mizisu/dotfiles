@@ -9,6 +9,8 @@ import { createCommandWorking } from "./shared/command-working.js";
 
 const MAX_DIFF_CHARS = 180_000;
 const MAX_SESSION_CONTEXT_CHARS = 8_000;
+const MAX_COMMIT_STYLE_CHARS = 12_000;
+const MAX_COMMIT_STYLE_EXAMPLES = 20;
 const MAX_UNTRACKED_FILE_BYTES = 24_000;
 const MAX_UNTRACKED_TOTAL_BYTES = 90_000;
 const MAX_SUBJECT_LENGTH = 120;
@@ -40,6 +42,9 @@ Return ONLY valid JSON, no markdown fences:
 Rules:
 - Group changes by PURPOSE and dependency, not by file extension.
 - Use Conventional Commits: feat, fix, refactor, chore, docs, style, test, perf, ci, build.
+- Match "Author commit style examples" when provided: language, scope granularity, and description usage.
+- Still keep the subject in Conventional Commit form; do not copy merge, PR, issue-number suffixes, or co-author trailers from examples.
+- Leave description empty for simple commits; when used, explain why/context/details without repeating the subject.
 - Do not include issue tracker tags.
 - Every commit must be independently buildable/runnable.
 - Never split tightly coupled changes, shared interfaces, imports/usages, or renames across separate commits.
@@ -339,6 +344,29 @@ function normalizeDescription(value: unknown): string {
   return String(value ?? "").trim().slice(0, 2000);
 }
 
+function appendIndentedLines(lines: string[], text: string, indent: string): void {
+  for (const line of text.split("\n")) lines.push(line ? `${indent}${line}` : "");
+}
+
+function appendCommitMessageDetails(lines: string[], commit: PlanCommit, heading: string): void {
+  lines.push(heading);
+  lines.push(`   ${commit.subject}`);
+  if (!commit.description) return;
+
+  lines.push("");
+  lines.push("   Description");
+  appendIndentedLines(lines, commit.description, "   ");
+}
+
+function formatCompletedCommits(commits: PlanCommit[]): string {
+  const lines: string[] = [];
+  for (const [index, commit] of commits.entries()) {
+    appendCommitMessageDetails(lines, commit, `${index + 1}. Message`);
+    if (index < commits.length - 1) lines.push("");
+  }
+  return lines.join("\n");
+}
+
 function normalizeFileSpec(value: unknown, file: DiffFile | undefined): FileSpec | undefined {
   if (value === "all") return "all";
   if (!Array.isArray(value)) return undefined;
@@ -447,8 +475,9 @@ function formatPlan(commits: PlanCommit[], warnings: string[], sensitiveSkipped:
   }
 
   for (const [index, commit] of commits.entries()) {
-    lines.push(`${index + 1}. ${commit.subject}`);
-    if (commit.description) lines.push(`   ${commit.description}`);
+    appendCommitMessageDetails(lines, commit, `${index + 1}. Message`);
+    lines.push("");
+    lines.push("   Files");
     const entries = Object.entries(commit.files).map(([file, spec]) => spec === "all" ? file : `${file} (hunks ${spec.join(", ")})`);
     for (const entry of entries.slice(0, 12)) lines.push(`   - ${entry}`);
     if (entries.length > 12) lines.push(`   - ...and ${entries.length - 12} more file(s)`);
@@ -461,6 +490,54 @@ function formatPlan(commits: PlanCommit[], warnings: string[], sensitiveSkipped:
 
 async function git(pi: ExtensionAPI, root: string, args: string[], timeout = 60_000) {
   return pi.exec("git", args, { cwd: root, timeout });
+}
+
+function cleanCommitStyleExample(record: string): string {
+  const lines = record
+    .split("\n")
+    .filter((line) => !/^Co-authored-by:/i.test(line.trim()));
+  if (lines[0]) lines[0] = lines[0].replace(/\s+\(#\d+\)\s*$/, "");
+  return lines.join("\n").trim();
+}
+
+function formatCommitStyleExamples(raw: string): string {
+  const examples = raw
+    .split("\x1e")
+    .map(cleanCommitStyleExample)
+    .filter(Boolean)
+    .slice(0, MAX_COMMIT_STYLE_EXAMPLES)
+    .map((record) => truncateText(record, 1_200, "[commit example truncated]"));
+
+  return truncateText(examples.join("\n\n---\n\n"), MAX_COMMIT_STYLE_CHARS, "[commit style examples truncated]");
+}
+
+async function readAuthorCommitStyleExamples(pi: ExtensionAPI, root: string): Promise<string> {
+  const [emailResult, nameResult] = await Promise.all([
+    git(pi, root, ["config", "user.email"], 10_000),
+    git(pi, root, ["config", "user.name"], 10_000),
+  ]);
+  const authorCandidates = [
+    emailResult.code === 0 ? emailResult.stdout.trim() : "",
+    nameResult.code === 0 ? nameResult.stdout.trim() : "",
+  ];
+  const authors = authorCandidates.filter((value, index, values) => Boolean(value) && values.indexOf(value) === index);
+  const baseArgs = ["log", "--no-merges", `-${MAX_COMMIT_STYLE_EXAMPLES}`, "--format=%s%n%b%x1e"];
+
+  for (const author of authors) {
+    const result = await git(
+      pi,
+      root,
+      ["log", "--no-merges", `--author=${author}`, `-${MAX_COMMIT_STYLE_EXAMPLES}`, "--format=%s%n%b%x1e"],
+      20_000,
+    );
+    if (result.code !== 0) continue;
+    const examples = formatCommitStyleExamples(result.stdout);
+    if (examples) return examples;
+  }
+
+  const result = await git(pi, root, baseArgs, 20_000);
+  if (result.code !== 0) return "";
+  return formatCommitStyleExamples(result.stdout);
 }
 
 async function gitRoot(pi: ExtensionAPI, cwd: string): Promise<string | undefined> {
@@ -693,12 +770,13 @@ export default function commitExtension(pi: ExtensionAPI) {
       try {
         setStatus("Gathering changes…");
         const pathspec = ["--", ".", ...SENSITIVE_EXCLUDE_PATHS];
-        const [log, status, statusAll, diff, untrackedRaw] = await Promise.all([
+        const [log, status, statusAll, diff, untrackedRaw, authorStyleExamples] = await Promise.all([
           git(pi, root, ["log", "-6", "--format=%s%n%b---"], 10_000),
           git(pi, root, ["status", "--short", ...pathspec], 20_000),
           git(pi, root, ["status", "--short"], 20_000),
           git(pi, root, ["diff", "--no-ext-diff", "--no-color", "HEAD", ...pathspec], 60_000),
           git(pi, root, ["ls-files", "--others", "--exclude-standard", "-z", ...pathspec], 20_000),
+          readAuthorCommitStyleExamples(pi, root),
         ]);
 
         const diffFiles = parseDiff(diff.stdout);
@@ -732,6 +810,7 @@ export default function commitExtension(pi: ExtensionAPI) {
         const modelInput = [
           explicitIntent ? `## Explicit user commit intent\n${explicitIntent}` : "",
           sessionContext ? `## Recent session context\n${sessionContext}` : "",
+          authorStyleExamples ? `## Author commit style examples\n${authorStyleExamples}` : "",
           `## Recent git log\n${log.stdout.trim() || "(no recent commits)"}`,
           `## Git status (safe paths only)\n${status.stdout.trim()}`,
           `## Changed files that must be placed\n${[...changedFiles].sort().join("\n")}`,
@@ -796,9 +875,9 @@ export default function commitExtension(pi: ExtensionAPI) {
         }
 
         const pushSummary = await promptPushAfterCommits(pi, root, ctx, setStatus);
-        const summary = completed.map((commit, index) => `${index + 1}. ${commit.subject}`).join("\n");
+        const summary = formatCompletedCommits(completed);
         pi.sendMessage(
-          { customType: "commit", content: `✓ Created ${completed.length} commit${completed.length === 1 ? "" : "s"}:\n${summary}\n\n${pushSummary}`, display: true },
+          { customType: "commit", content: `✓ Created ${completed.length} commit${completed.length === 1 ? "" : "s"}:\n\n${summary}\n\n${pushSummary}`, display: true },
           { triggerTurn: false },
         );
         ctx.ui.notify(`Created ${completed.length} commit${completed.length === 1 ? "" : "s"}`, "info");

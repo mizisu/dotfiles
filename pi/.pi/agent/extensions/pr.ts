@@ -9,7 +9,6 @@ import { resolveMediumModel } from "./shared/model-slots.js";
 import { createCommandWorking } from "./shared/command-working.js";
 
 const MAX_DIFF_CHARS = 100_000;
-const MAX_SESSION_CONTEXT_CHARS = 12_000;
 const MAX_TEMPLATE_CHARS = 30_000;
 const MAX_TITLE_CHARS = 100;
 
@@ -21,25 +20,51 @@ const SENSITIVE_EXCLUDE_PATHS = [
   ":(exclude)agent/auth.json",
 ];
 
-const PR_SYSTEM_PROMPT = `You generate a GitHub pull request title and body.
+const DEFAULT_PR_TEMPLATE = `### 배경 (Why)
+<!-- 왜 이 변경이 필요한지 적어주세요. Jira, Slack, Figma, Notion 등 관련 링크가 있다면 포함해주세요. -->
+
+### 변경 내용 (What)
+<!-- 주요 변경 사항을 bullet으로 요약해주세요. -->
+
+### 리뷰 포인트
+<!-- 리뷰어가 집중해서 봐야 할 부분이 있다면 적어주세요. 없으면 삭제해도 됩니다. -->
+
+### 스크린샷/영상
+<!-- UI 변경이 있다면 첨부해주세요. 해당 없으면 삭제해도 됩니다. -->
+
+### 참고 사항
+<!-- 배포 순서, 마이그레이션, 서드파티 패키지 변경 등 리뷰어나 배포자가 알아야 할 사항이 있다면 적어주세요. 해당 없으면 삭제해도 됩니다. -->`;
+
+const PR_SYSTEM_PROMPT = `You generate a GitHub pull request title suggestion and body from committed changes.
 
 Return ONLY valid JSON, no markdown fences:
 {
-  "title": "Plain descriptive PR title",
+  "title": "Suggested PR title",
   "body": "Markdown PR body"
 }
 
 Rules:
-- Title: imperative mood, under 72 characters, specific to the actual change.
-- Do not use Conventional Commit prefixes in the title.
-- Body: concise and reviewer-focused.
-- Fill the provided PR template when present; otherwise use useful sections like ## Summary and ## Why.
-- Prefer 3-6 bullets total. Use "- " for bullets.
-- Explain WHY and reviewer-relevant impact more than file-by-file details.
-- Session context is a hint. If it conflicts with commits/diff, trust commits/diff.
+- Use ONLY the provided commits and diff as source material.
+- Do not use conversation, session context, assumptions, or unstated intent.
+- The title is only a suggestion; the user will confirm or override it.
+- Title: concise Korean PR title in the user's style, under 60 characters, specific to the main change.
+- Title style: start with the affected domain or feature, then state the main action as a noun/verb phrase such as 구현, 추가, 변경, 제거, 수정, or 연동; do not end with a period.
+- Do not use Conventional Commit prefixes in the title unless the committed changes are clearly tooling/chore-only.
+- Body content must describe only WHAT changed.
+- Write in Korean unless the template is clearly English-only.
+- Preserve the provided PR template's structure, heading order, checklists, comments, and placeholders as much as possible.
+- For the fixed Korean template, fill only the ### 변경 내용 (What) section.
+- For other templates, fill only the section for What / 변경 내용 / 무엇을 한 PR 인가요? / Summary of changes.
+- Leave all other sections empty, unchanged, or with their original placeholders; do not fill Why, Testing, Risk, Checklist, review points, screenshots, reference notes, or impact details.
+- In the What section, write 1-4 concise "- " bullets in the user's PR body style.
+- Prefer high-level summaries over exhaustive implementation details; do not describe every file, query, migration, normalization, or edge case unless it is the main change.
+- Start each bullet with the changed domain object, API, component, class, or test target; wrap code identifiers in backticks when helpful.
+- Use polite Korean declarative endings such as "추가하였습니다", "구현하였습니다", "변경하였습니다", "적용하였습니다", "연동하였습니다".
+- If tests changed, summarize them as one short final bullet.
+- User body style: explain the main changed behavior, not every implementation detail; use one sentence per bullet; keep wording direct and practical; avoid over-explaining internal queries, migrations, formatting, or edge cases unless they are the core change.
 - Do not invent changes that are not in the commits/diff.
 - Do not reference tools, reviewers, or the assistant.
-- Add a compact Mermaid diagram only if it clearly helps explain a non-trivial architecture or flow change.`;
+- Do not include Mermaid diagrams.`;
 
 interface GeneratedPr {
   title: string;
@@ -51,38 +76,6 @@ function truncateText(value: string, maxChars: number, note = "[truncated]"): st
   const head = Math.floor(maxChars * 0.65);
   const tail = Math.max(0, maxChars - head - note.length - 4);
   return `${value.slice(0, head)}\n${note}\n${value.slice(value.length - tail)}`;
-}
-
-function textFromContent(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-
-  return content
-    .map((part: any) => {
-      if (part?.type === "text" && typeof part.text === "string") return part.text;
-      if (part?.type === "toolCall") return `[tool call: ${part.name ?? "unknown"}]`;
-      return "";
-    })
-    .filter(Boolean)
-    .join("\n");
-}
-
-function buildSessionContext(ctx: any): string {
-  const branch = ctx.sessionManager?.getBranch?.();
-  if (!Array.isArray(branch)) return "";
-
-  const entries = branch
-    .filter((entry: any) => entry?.type === "message" && entry.message)
-    .slice(-12)
-    .map((entry: any) => {
-      const message = entry.message;
-      const role = typeof message.role === "string" ? message.role : "message";
-      const text = truncateText(textFromContent(message.content).trim(), 1200);
-      return text ? `### ${role}\n${text}` : "";
-    })
-    .filter(Boolean);
-
-  return truncateText(entries.join("\n\n"), MAX_SESSION_CONTEXT_CHARS);
 }
 
 function extractAssistantText(response: any): string {
@@ -125,16 +118,18 @@ function extractJsonObject(text: string): unknown {
   throw new Error("unterminated JSON object");
 }
 
-function normalizePrContent(raw: unknown): GeneratedPr {
+function normalizePrTitle(value: string): string {
+  const title = value.replace(/\s+/g, " ").trim();
+  return title.length <= MAX_TITLE_CHARS ? title : `${title.slice(0, MAX_TITLE_CHARS - 1).trimEnd()}…`;
+}
+
+function normalizePrDraft(raw: unknown): GeneratedPr {
   const parsed = raw as any;
-  const title = String(parsed?.title ?? "").replace(/\s+/g, " ").trim();
+  const title = normalizePrTitle(String(parsed?.title ?? ""));
   const body = String(parsed?.body ?? "").trim();
   if (!title) throw new Error("missing title");
   if (!body) throw new Error("missing body");
-  return {
-    title: title.length <= MAX_TITLE_CHARS ? title : `${title.slice(0, MAX_TITLE_CHARS - 1).trimEnd()}…`,
-    body,
-  };
+  return { title, body };
 }
 
 function parseBranchArg(args: string | undefined): string | undefined {
@@ -350,7 +345,7 @@ async function findPrTemplate(root: string): Promise<string | undefined> {
   return undefined;
 }
 
-async function generatePrContent(ctx: any, input: string): Promise<GeneratedPr> {
+async function generatePrDraft(ctx: any, input: string): Promise<GeneratedPr> {
   const resolved = await resolveMediumModel(ctx);
   const messages: Message[] = [{
     role: "user",
@@ -366,7 +361,7 @@ async function generatePrContent(ctx: any, input: string): Promise<GeneratedPr> 
 
   if (response.stopReason === "error") throw new Error(response.errorMessage ?? "model error");
   if (response.stopReason === "aborted") throw new Error("generation aborted");
-  return normalizePrContent(extractJsonObject(extractAssistantText(response)));
+  return normalizePrDraft(extractJsonObject(extractAssistantText(response)));
 }
 
 async function ensureGhReady(pi: ExtensionAPI, root: string): Promise<string | undefined> {
@@ -388,6 +383,12 @@ function previewText(title: string, body: string, base: string, current: string)
   return [`${current} → ${base}`, "", title, "─".repeat(40), body, "", "This will push the current branch to origin and create a draft PR."].join("\n");
 }
 
+async function promptPrTitle(ctx: any, suggestedTitle: string): Promise<string | undefined> {
+  const input = await ctx.ui.input("PR title (leave empty to use suggestion)", suggestedTitle);
+  if (input === undefined) return undefined;
+  return normalizePrTitle(input) || suggestedTitle;
+}
+
 async function editPrContent(ctx: any, generated: GeneratedPr, base: string, current: string): Promise<GeneratedPr | undefined> {
   const preview = previewText(generated.title, generated.body, base, current);
   const action = await ctx.ui.select(preview, [
@@ -401,8 +402,8 @@ async function editPrContent(ctx: any, generated: GeneratedPr, base: string, cur
   if (action === "Edit title") {
     const next = await ctx.ui.input("PR title (leave empty to keep current)", generated.title);
     if (next === undefined) return undefined;
-    const title = next.trim() || generated.title;
-    return editPrContent(ctx, { ...generated, title: title.slice(0, MAX_TITLE_CHARS) }, base, current);
+    const title = normalizePrTitle(next) || generated.title;
+    return editPrContent(ctx, { ...generated, title }, base, current);
   }
   if (action === "Edit body") {
     const body = await ctx.ui.editor("PR body", generated.body);
@@ -467,7 +468,7 @@ export default function prExtension(pi: ExtensionAPI) {
           return;
         }
 
-        setStatus("Gathering PR context…", [`${current} → ${base}`]);
+        setStatus("Gathering committed changes…", [`${current} → ${base}`]);
         const baseRef = `origin/${base}`;
         const pathspec = ["--", ".", ...SENSITIVE_EXCLUDE_PATHS];
         const [baseCheck, status, log, diff] = await Promise.all([
@@ -499,27 +500,30 @@ export default function prExtension(pi: ExtensionAPI) {
             ctx.ui.notify("Cancelled", "info");
             return;
           }
-          setStatus("Gathering PR context…", [`${current} → ${base}`]);
+          setStatus("Gathering committed changes…", [`${current} → ${base}`]);
         }
 
-        const [template, sessionContext] = await Promise.all([
-          findPrTemplate(root),
-          Promise.resolve(buildSessionContext(ctx)),
-        ]);
+        setStatus("Gathering PR template…", [`${current} → ${base}`]);
+        const template = (await findPrTemplate(root)) ?? DEFAULT_PR_TEMPLATE;
 
         const modelInput = [
-          template ? `## PR Template\n${template}` : "",
-          sessionContext ? `## Recent Session Context\n${sessionContext}` : "",
+          `## PR Template (preserve format; fill only What / 변경 내용 / 무엇을 한 PR 인가요? / Summary of changes)\n${template}`,
           `## Branch\n${current} → ${base}`,
-          `## Commits\n${log.stdout.trim()}`,
-          `## Diff (sensitive files excluded)\n${truncateText(diff.stdout, MAX_DIFF_CHARS, "[diff truncated]")}`,
+          `## Commits (source of truth)\n${log.stdout.trim()}`,
+          `## Diff (source of truth; sensitive files excluded)\n${truncateText(diff.stdout, MAX_DIFF_CHARS, "[diff truncated]")}`,
         ].filter(Boolean).join("\n\n");
 
-        setStatus("Generating PR with medium model…", ["title/body draft"]);
-        const generated = await generatePrContent(ctx, modelInput);
+        setStatus("Generating PR draft with medium model…", ["title suggestion", "What section only"]);
+        const generated = await generatePrDraft(ctx, modelInput);
         setStatus(undefined);
 
-        const finalContent = await editPrContent(ctx, generated, base, current);
+        const title = await promptPrTitle(ctx, generated.title);
+        if (!title) {
+          ctx.ui.notify("Cancelled", "info");
+          return;
+        }
+
+        const finalContent = await editPrContent(ctx, { ...generated, title }, base, current);
         if (!finalContent) {
           ctx.ui.notify("Cancelled", "info");
           return;

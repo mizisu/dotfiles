@@ -18,11 +18,6 @@ import { createCommandWorking } from "./shared/command-working.js";
 const REVIEW_TIMEOUT = 900_000;
 const MAX_ERROR_CHARS = 4_000;
 const PREVIEW_SCROLL_STEP = 8;
-const CODEX_REVIEW_GUARDRAILS = `Review behavior constraints:
-- Do not run manual lint/format/typecheck commands unless explicitly requested, LSP reports errors, or non-LSP tests/validation are required.
-- Treat successful edit/write results without LSP errors as LSP-clean.
-- Never run repo-wide checks (e.g. pyright ., eslint ., ruff ., full-project formatters) unless explicitly asked; if validation is needed, use the smallest targeted command.`;
-
 type ReviewSource = "coderabbit" | "codex";
 type ReviewScope = "base" | "uncommitted" | "commit";
 
@@ -448,7 +443,14 @@ function cleanTitle(content: string, fallback: string): string {
     .slice(0, 120) || fallback;
 }
 
+function hasReviewFindingMarkers(output: string): boolean {
+  return /^(?:[-*]\s*)?\[(P[0-4])\]\s+.+$/gim.test(output)
+    || (/^File:\s*.+$/gm.test(output) && /^(?:Line|Severity|Comment|Prompt for AI Agent):/gm.test(output))
+    || /<finding\b/i.test(output);
+}
+
 function looksLikeCleanReview(output: string): boolean {
+  if (hasReviewFindingMarkers(output)) return false;
   const text = output.toLowerCase();
   return /no (meaningful |actionable |discrete |correctness |critical )*(issues|findings|problems)/.test(text)
     || /did not find (any )?(meaningful |actionable |discrete |correctness |critical )*(issues|findings|problems)/.test(text)
@@ -468,6 +470,142 @@ function makeFinding(source: ReviewSource, index: number, content: string, fallb
     file: detectFile(trimmed),
     content: trimmed,
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) return Number(value.trim());
+  return undefined;
+}
+
+function recordString(record: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = stringValue(record[key]);
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function prettyJson(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function parseJsonLineRecords(output: string): Record<string, unknown>[] {
+  const records: Record<string, unknown>[] = [];
+  for (const line of output.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("{")) continue;
+    try {
+      const value = JSON.parse(trimmed);
+      if (isRecord(value)) records.push(value);
+    } catch {
+      // Ignore non-JSON progress/log lines.
+    }
+  }
+  return records;
+}
+
+function normalizeSeverity(value: unknown): string | undefined {
+  const severity = stringValue(value);
+  if (!severity || severity.toLowerCase() === "none") return undefined;
+  return severity.toUpperCase();
+}
+
+function lineRange(record: Record<string, unknown>): string | undefined {
+  const start = numberValue(record.startLine ?? record.line ?? record.lineNumber);
+  const end = numberValue(record.endLine);
+  if (start === undefined) return undefined;
+  return end !== undefined && end !== start ? `${start}-${end}` : String(start);
+}
+
+function formatSuggestions(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length === 0) return [];
+  return value.map((suggestion, index) => {
+    const text = isRecord(suggestion)
+      ? recordString(suggestion, ["text", "description", "comment", "message", "replacement", "code"])
+      : stringValue(suggestion);
+    return text ? `${index + 1}. ${text}` : `${index + 1}. ${prettyJson(suggestion)}`;
+  });
+}
+
+function isCodeRabbitAgentRecord(record: Record<string, unknown>): boolean {
+  const type = stringValue(record.type)?.toLowerCase();
+  return type === "review_context"
+    || type === "status"
+    || type === "complete"
+    || type === "error"
+    || type === "finding"
+    || type === "review_finding";
+}
+
+function isCodeRabbitAgentFinding(record: Record<string, unknown>): boolean {
+  const type = stringValue(record.type)?.toLowerCase();
+  if (type === "finding" || type === "review_finding") return true;
+  if (type) return false;
+  return Boolean(
+    recordString(record, ["fileName", "file", "path"])
+    && (recordString(record, ["codegenInstructions", "comment", "message", "description", "title"])
+      || (Array.isArray(record.suggestions) && record.suggestions.length > 0)),
+  );
+}
+
+function makeCodeRabbitAgentFinding(record: Record<string, unknown>, index: number): ReviewFinding {
+  const file = recordString(record, ["fileName", "file", "path"]);
+  const severity = normalizeSeverity(record.severity);
+  const location = lineRange(record);
+  const comment = recordString(record, ["comment", "message", "description"]);
+  const codegenInstructions = recordString(record, ["codegenInstructions"]);
+  const titleSource = recordString(record, ["title"]) ?? comment ?? codegenInstructions;
+  const suggestions = formatSuggestions(record.suggestions);
+  const lines = [
+    file ? `File: ${file}` : "",
+    location ? `Line: ${location}` : "",
+    severity ? `Severity: ${severity}` : "",
+    comment ? `\nComment:\n${comment}` : "",
+    codegenInstructions ? `\nPrompt to Fix with AI:\n${codegenInstructions}` : "",
+    suggestions.length > 0 ? `\nSuggestions:\n${suggestions.join("\n")}` : "",
+  ].filter(Boolean);
+
+  const content = lines.length > 0 ? lines.join("\n") : prettyJson(record);
+  return {
+    id: `coderabbit-${index}`,
+    source: "coderabbit",
+    severity,
+    title: cleanTitle(titleSource ?? content, "CodeRabbit review"),
+    file,
+    content,
+  };
+}
+
+function parseCodeRabbitReviewFindings(output: string): ReviewFinding[] {
+  const records = parseJsonLineRecords(output);
+  const isAgentOutput = records.some(isCodeRabbitAgentRecord);
+  if (!isAgentOutput) return parseReviewFindings("coderabbit", output);
+
+  return records
+    .filter(isCodeRabbitAgentFinding)
+    .map((record, index) => makeCodeRabbitAgentFinding(record, index));
+}
+
+function codeRabbitReportedFindingCount(output: string): number | undefined {
+  for (const record of parseJsonLineRecords(output)) {
+    if (stringValue(record.type)?.toLowerCase() !== "complete") continue;
+    const count = numberValue(record.findings);
+    if (count !== undefined) return count;
+  }
+  return undefined;
 }
 
 function splitByLineStarts(output: string, pattern: RegExp): string[] {
@@ -530,7 +668,7 @@ async function runCodeRabbitReview(pi: ExtensionAPI, config: ReviewConfig): Prom
   let cleanup: (() => Promise<void>) | undefined;
 
   try {
-    const args = ["review", "--plain", "--no-color"];
+    const args = ["review", "--agent", "--no-color"];
 
     if (config.scope === "base") {
       args.push("--type", "committed", "--base", config.base!);
@@ -554,23 +692,23 @@ async function runCodeRabbitReview(pi: ExtensionAPI, config: ReviewConfig): Prom
     }
 
     const result = await pi.exec("cr", args, { cwd, timeout: REVIEW_TIMEOUT });
-    const raw = result.stdout.trim();
+    const raw = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
     if (result.code !== 0) {
       return { source: "coderabbit", findings: [], raw, error: executionFailureText("CodeRabbit review", result, REVIEW_TIMEOUT) };
     }
-    return { source: "coderabbit", findings: parseReviewFindings("coderabbit", raw), raw };
+
+    const findings = parseCodeRabbitReviewFindings(raw);
+    const reportedFindings = codeRabbitReportedFindingCount(raw);
+    const parseError = reportedFindings !== undefined && reportedFindings > findings.length
+      ? `CodeRabbit reported ${reportedFindings} finding(s), but /review parsed ${findings.length}. Raw output:\n${truncate(raw)}`
+      : undefined;
+    return { source: "coderabbit", findings, raw, error: parseError };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { source: "coderabbit", findings: [], raw: "", error: `CodeRabbit review failed: ${message}` };
   } finally {
     await cleanup?.();
   }
-}
-
-function buildCodexPrompt(instructions?: string): string {
-  return instructions
-    ? `${CODEX_REVIEW_GUARDRAILS}\n\nAdditional review focus:\n${instructions}`
-    : CODEX_REVIEW_GUARDRAILS;
 }
 
 async function runCodexReview(pi: ExtensionAPI, config: ReviewConfig): Promise<ReviewRunResult> {
@@ -586,8 +724,6 @@ async function runCodexReview(pi: ExtensionAPI, config: ReviewConfig): Promise<R
     if (config.scope === "base") args.push("--base", config.base!);
     else if (config.scope === "uncommitted") args.push("--uncommitted");
     else args.push("--commit", config.commit!);
-
-    args.push("--", buildCodexPrompt(config.instructions));
 
     const result = await pi.exec("codex", args, { cwd: config.root, timeout: REVIEW_TIMEOUT });
     const raw = result.stdout.trim();
@@ -656,7 +792,9 @@ async function showReviewPicker(ctx: any, findings: ReviewFinding[], results: Re
     });
 
     const finish = () => {
-      const chosen = selectedSorted(selected, findings);
+      const current = list.getSelectedItem()?.value;
+      const selectedOrCurrent = selected.size > 0 ? selected : new Set(current ? [current] : []);
+      const chosen = selectedSorted(selectedOrCurrent, findings);
       done(chosen.length > 0 ? { findings: chosen, comment: commentInput.getValue().trim() || undefined } : undefined);
     };
 
@@ -700,7 +838,7 @@ async function showReviewPicker(ctx: any, findings: ReviewFinding[], results: Re
           lines.push(` ${theme.fg("dim", "enter")} apply  ${theme.fg("dim", "esc")} back`);
         } else {
           lines.push("");
-          lines.push(` ${theme.fg("dim", "space")} toggle  ${theme.fg("dim", "a")} all  ${theme.fg("dim", "[ ]")} preview  ${theme.fg("dim", "c")} comment  ${theme.fg("dim", "enter")} apply  ${theme.fg("dim", "esc")} cancel`);
+          lines.push(` ${theme.fg("dim", "space")} toggle  ${theme.fg("dim", "a")} all  ${theme.fg("dim", "[ ]")} preview  ${theme.fg("dim", "c")} comment  ${theme.fg("dim", "enter")} apply selected/current  ${theme.fg("dim", "esc")} cancel`);
         }
 
         lines.push(...borderBottom.render(width));
@@ -763,10 +901,17 @@ async function showReviewPicker(ctx: any, findings: ReviewFinding[], results: Re
           tui.requestRender();
           return;
         }
-        if (data === "c" && selected.size > 0) {
-          mode = "comment";
-          commentInput.focused = true;
-          tui.requestRender();
+        if (data === "c") {
+          const current = list.getSelectedItem();
+          if (selected.size === 0 && current) {
+            selected.add(current.value);
+            list.invalidate();
+          }
+          if (selected.size > 0) {
+            mode = "comment";
+            commentInput.focused = true;
+            tui.requestRender();
+          }
         }
       },
     };
@@ -804,7 +949,7 @@ async function dirtySummary(pi: ExtensionAPI, root: string): Promise<string> {
 
 export default function reviewExtension(pi: ExtensionAPI) {
   pi.registerCommand("review", {
-    description: "Run CodeRabbit and Codex reviews in parallel, then select findings to apply. Pass Codex prompt after --.",
+    description: "Run CodeRabbit and Codex reviews in parallel, then select findings to apply.",
     handler: async (args, ctx) => {
       if (!ctx.hasUI) {
         ctx.ui.notify("/review requires interactive or RPC UI", "error");
@@ -860,11 +1005,8 @@ export default function reviewExtension(pi: ExtensionAPI) {
 
         setProgress("Running CodeRabbit + Codex reviews…", [
           `Scope: ${scopeText(config)}`,
-          "Codex guardrail: no manual lint/format/typecheck unless required",
-          ...(config.instructions ? [`Codex focus: ${truncate(config.instructions, 180)}`] : []),
-          "CodeRabbit: cr review (up to 15m)",
+          "CodeRabbit: cr review --agent (up to 15m)",
           `Codex: codex review (${config.codexEffort} reasoning, up to 15m)`,
-          "You can keep reading; results will open when both finish or fail.",
         ]);
         const [coderabbit, codex] = await Promise.all([
           runCodeRabbitReview(pi, config),
