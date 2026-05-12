@@ -1,4 +1,4 @@
-import { DynamicBorder, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { DynamicBorder, isToolCallEventType, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import {
   Input,
   Key,
@@ -11,14 +11,21 @@ import {
   type SelectItem,
 } from "@mariozechner/pi-tui";
 import { readFile } from "node:fs/promises";
-import { basename, extname, relative } from "node:path";
+import { basename, extname, isAbsolute, relative, resolve } from "node:path";
 import type { Diagnostic, LspLocation, WorkspaceSymbol } from "./client.js";
 import { LspManager, type ManagedLspServer, type ReadyLspServer } from "./manager.js";
 import { formatCommand, formatRoot } from "./servers.js";
 
 const manager = new LspManager();
 const MAX_DIAGNOSTICS_PER_FILE = 20;
+const POST_WRITE_LSP_WAIT_MS = 5_000;
 const SYMBOL_PICKER_LIMIT = 50;
+const DIAGNOSTIC_SEVERITY_RANK: Record<Diagnostic["severity"], number> = {
+  error: 0,
+  warning: 1,
+  info: 2,
+  hint: 3,
+};
 
 const searchSymbolsParameters = {
   type: "object",
@@ -188,11 +195,17 @@ function formatDiagnostic(diagnostic: Diagnostic): string {
 }
 
 function renderDiagnosticsBlock(filePath: string, diagnostics: Diagnostic[]): string {
-  const errors = dedupeDiagnostics(diagnostics).filter((diagnostic) => diagnostic.severity === "error");
-  if (errors.length === 0) return "";
+  const actionable = dedupeDiagnostics(diagnostics)
+    .filter((diagnostic) => diagnostic.severity === "error" || diagnostic.severity === "warning")
+    .sort((a, b) => {
+      const severity = DIAGNOSTIC_SEVERITY_RANK[a.severity] - DIAGNOSTIC_SEVERITY_RANK[b.severity];
+      if (severity !== 0) return severity;
+      return a.line - b.line || a.character - b.character || a.message.localeCompare(b.message);
+    });
+  if (actionable.length === 0) return "";
 
-  const shown = errors.slice(0, MAX_DIAGNOSTICS_PER_FILE);
-  const more = errors.length - shown.length;
+  const shown = actionable.slice(0, MAX_DIAGNOSTICS_PER_FILE);
+  const more = actionable.length - shown.length;
   const suffix = more > 0 ? `\n... and ${more} more` : "";
   return `<diagnostics file="${filePath}">\n${shown.map(formatDiagnostic).join("\n")}${suffix}\n</diagnostics>`;
 }
@@ -345,6 +358,296 @@ function clampReferencesLimit(limit: number | undefined): number {
   return Math.max(1, Math.min(200, Math.floor(limit!)));
 }
 
+const MANUAL_CHECK_BINARIES = new Set([
+  "basedpyright",
+  "basedpyright-langserver",
+  "biome",
+  "black",
+  "eslint",
+  "eslint_d",
+  "flake8",
+  "isort",
+  "mypy",
+  "oxlint",
+  "prettier",
+  "pylint",
+  "pyflakes",
+  "pyright",
+  "ruff",
+  "stylelint",
+  "svelte-check",
+  "tsc",
+  "vue-tsc",
+]);
+const PACKAGE_MANAGERS = new Set(["bun", "npm", "pnpm", "yarn"]);
+const PACKAGE_EXEC_COMMANDS = new Set(["dlx", "exec", "x"]);
+const OPTIONS_WITH_VALUE = new Set([
+  "--cache-location",
+  "--config",
+  "--cwd",
+  "--dir",
+  "--filter",
+  "--package",
+  "--prefix",
+  "--project",
+  "--workspace",
+  "-C",
+  "-F",
+  "-c",
+  "-p",
+]);
+const CHECK_SCRIPT_PARTS = [
+  "biome",
+  "check-types",
+  "eslint",
+  "fmt",
+  "format",
+  "lint",
+  "prettier",
+  "pyright",
+  "ruff",
+  "stylelint",
+  "tsc",
+  "type-check",
+  "typecheck",
+  "types-check",
+];
+
+function splitShellWords(command: string): string[] {
+  const tokens: string[] = [];
+  let token = "";
+  let quote: "'" | '"' | undefined;
+  let escaped = false;
+
+  function pushToken() {
+    if (token) tokens.push(token);
+    token = "";
+  }
+
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index]!;
+
+    if (escaped) {
+      token += char;
+      escaped = false;
+      continue;
+    }
+
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+
+    if (quote) {
+      if (char === quote) quote = undefined;
+      else token += char;
+      continue;
+    }
+
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+
+    if (/\s/.test(char)) {
+      pushToken();
+      continue;
+    }
+
+    if (char === ";" || char === "|" || char === "&") {
+      pushToken();
+      if ((char === "|" || char === "&") && command[index + 1] === char) {
+        tokens.push(`${char}${char}`);
+        index += 1;
+      } else {
+        tokens.push(char);
+      }
+      continue;
+    }
+
+    token += char;
+  }
+
+  pushToken();
+  return tokens;
+}
+
+function commandSegments(tokens: string[]): string[][] {
+  const segments: string[][] = [];
+  let segment: string[] = [];
+
+  for (const token of tokens) {
+    if (token === "&&" || token === "||" || token === ";" || token === "|") {
+      if (segment.length > 0) segments.push(segment);
+      segment = [];
+      continue;
+    }
+
+    segment.push(token);
+  }
+
+  if (segment.length > 0) segments.push(segment);
+  return segments;
+}
+
+function commandBaseName(token: string | undefined): string {
+  if (!token) return "";
+  const withoutAssignment = token.includes("=") && !token.startsWith("--")
+    ? token.slice(token.lastIndexOf("=") + 1)
+    : token;
+  const stripped = withoutAssignment
+    .replace(/^[({]+/, "")
+    .replace(/[)},;]+$/, "")
+    .replace(/\.cmd$/i, "");
+  const base = stripped.split(/[\\/]/).pop() ?? stripped;
+  return base.replace(/\.(?:cjs|js|mjs|ts)$/i, "").toLowerCase();
+}
+
+function isEnvAssignment(token: string | undefined): boolean {
+  return Boolean(token && /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(token));
+}
+
+function optionKey(token: string): string {
+  return token.includes("=") ? token.slice(0, token.indexOf("=")) : token;
+}
+
+function skipOptions(tokens: string[], start: number): number {
+  let index = start;
+  while (index < tokens.length) {
+    const token = tokens[index]!;
+    if (token === "--") return index + 1;
+    if (!token.startsWith("-")) return index;
+    const key = optionKey(token);
+    index += 1;
+    if (OPTIONS_WITH_VALUE.has(key) && !token.includes("=")) index += 1;
+  }
+  return index;
+}
+
+function stripCommandWrappers(tokens: string[]): string[] {
+  let start = 0;
+
+  while (start < tokens.length) {
+    while (isEnvAssignment(tokens[start])) start += 1;
+
+    const command = commandBaseName(tokens[start]);
+    if (command === "command" || command === "time" || command === "then" || command === "do") {
+      start += 1;
+      continue;
+    }
+
+    if (command === "env") {
+      start = skipOptions(tokens, start + 1);
+      while (isEnvAssignment(tokens[start])) start += 1;
+      continue;
+    }
+
+    if (command === "timeout" || command === "gtimeout") {
+      let next = skipOptions(tokens, start + 1);
+      if (next < tokens.length) next += 1;
+      start = next;
+      continue;
+    }
+
+    break;
+  }
+
+  return tokens.slice(start);
+}
+
+function isCheckScriptName(script: string | undefined): boolean {
+  if (!script) return false;
+  const normalized = commandBaseName(script).replace(/[:_]+/g, "-");
+  return CHECK_SCRIPT_PARTS.some((part) =>
+    normalized === part
+    || normalized.startsWith(`${part}-`)
+    || normalized.endsWith(`-${part}`)
+    || normalized.includes(`-${part}-`),
+  );
+}
+
+function detectExecutableCheck(tokens: string[], start: number): string | undefined {
+  const executableIndex = skipOptions(tokens, start);
+  const executableTokens = tokens.slice(executableIndex);
+  const executable = commandBaseName(executableTokens[0]);
+
+  if (MANUAL_CHECK_BINARIES.has(executable)) return executable;
+  if (/^python(?:\d+(?:\.\d+)?)?$/.test(executable)) return detectPythonModuleCheck(executableTokens);
+  return detectShellScriptCheck(executableTokens);
+}
+
+function detectPackageManagerCheck(tokens: string[]): string | undefined {
+  const manager = commandBaseName(tokens[0]);
+  const subcommandIndex = skipOptions(tokens, 1);
+  const subcommand = commandBaseName(tokens[subcommandIndex]);
+
+  if (!subcommand) return undefined;
+
+  if (subcommand === "run") {
+    const scriptIndex = skipOptions(tokens, subcommandIndex + 1);
+    return isCheckScriptName(tokens[scriptIndex]) ? `${manager} run ${tokens[scriptIndex]}` : undefined;
+  }
+
+  if (PACKAGE_EXEC_COMMANDS.has(subcommand)) {
+    return detectExecutableCheck(tokens, subcommandIndex + 1);
+  }
+
+  if (isCheckScriptName(tokens[subcommandIndex])) return `${manager} ${tokens[subcommandIndex]}`;
+  return undefined;
+}
+
+function detectPythonModuleCheck(tokens: string[]): string | undefined {
+  const moduleFlagIndex = tokens.findIndex((token) => token === "-m");
+  if (moduleFlagIndex === -1) return undefined;
+
+  const moduleName = commandBaseName(tokens[moduleFlagIndex + 1]);
+  return MANUAL_CHECK_BINARIES.has(moduleName) ? `python -m ${moduleName}` : undefined;
+}
+
+function detectShellScriptCheck(tokens: string[]): string | undefined {
+  const command = commandBaseName(tokens[0]);
+  if (command !== "bash" && command !== "sh" && command !== "zsh") return undefined;
+
+  for (let index = 1; index < tokens.length; index += 1) {
+    if (!tokens[index]?.includes("c")) continue;
+    const script = tokens[index + 1];
+    if (!script) return undefined;
+    return detectManualCheckCommand(script);
+  }
+
+  return undefined;
+}
+
+function detectManualCheckSegment(rawSegment: string[]): string | undefined {
+  const tokens = stripCommandWrappers(rawSegment);
+  const command = commandBaseName(tokens[0]);
+
+  if (!command) return undefined;
+  if (MANUAL_CHECK_BINARIES.has(command)) return command;
+  if (PACKAGE_MANAGERS.has(command)) return detectPackageManagerCheck(tokens);
+  if (command === "npx" || command === "pnpx" || command === "bunx" || command === "uvx") return detectExecutableCheck(tokens, 1);
+  if (command === "uv" || command === "poetry" || command === "pipenv") {
+    const runIndex = tokens.findIndex((token) => commandBaseName(token) === "run");
+    return runIndex === -1 ? undefined : detectExecutableCheck(tokens, runIndex + 1);
+  }
+  if (/^python(?:\d+(?:\.\d+)?)?$/.test(command)) return detectPythonModuleCheck(tokens);
+  if (command === "deno") {
+    const subcommand = commandBaseName(tokens[1]);
+    return subcommand === "lint" || subcommand === "fmt" || subcommand === "check" ? `deno ${subcommand}` : undefined;
+  }
+
+  return detectShellScriptCheck(tokens);
+}
+
+function detectManualCheckCommand(command: string): string | undefined {
+  const tokens = splitShellWords(command);
+  for (const segment of commandSegments(tokens)) {
+    const detected = detectManualCheckSegment(segment);
+    if (detected) return detected;
+  }
+  return undefined;
+}
+
 async function runFormatters(servers: ReadyLspServer[]): Promise<string[]> {
   const applied: string[] = [];
 
@@ -366,8 +669,18 @@ async function collectDiagnostics(servers: ReadyLspServer[]): Promise<Diagnostic
     servers.map(async (server) => {
       try {
         return await server.client.collectDiagnostics(server.absolutePath, "document");
-      } catch {
-        return [];
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return [{
+          file: server.absolutePath,
+          line: 1,
+          character: 0,
+          endLine: 1,
+          endCharacter: 0,
+          severity: "warning" as const,
+          message: `${server.spec.displayName} diagnostics failed: ${message}`,
+          source: "lsp",
+        }];
       }
     }),
   );
@@ -375,16 +688,82 @@ async function collectDiagnostics(servers: ReadyLspServer[]): Promise<Diagnostic
   return dedupeDiagnostics(results.flat());
 }
 
+function resolveProjectFilePath(filePath: string): string {
+  const stripped = filePath.replace(/^@/, "");
+  if (isAbsolute(stripped)) return stripped;
+  const root = manager.snapshot().projectRoot || process.cwd();
+  return resolve(root, stripped);
+}
+
+function postWriteServerCandidates(filePath: string, role?: "diagnostics" | "format"): ManagedLspServer[] {
+  const extension = extname(resolveProjectFilePath(filePath)).toLowerCase();
+  if (!extension) return [];
+
+  return manager.snapshot().servers.filter((server) => {
+    if (!server.spec.extensions.includes(extension)) return false;
+    if (role) return server.spec.roles.includes(role);
+    return server.spec.roles.includes("diagnostics") || server.spec.roles.includes("format");
+  });
+}
+
+async function waitForPostWriteServers(filePath: string): Promise<void> {
+  if (!postWriteServerCandidates(filePath).some((server) => server.state === "starting")) return;
+
+  await new Promise<void>((resolveDone) => {
+    let done = false;
+    let timer: ReturnType<typeof setTimeout>;
+    let unsubscribe: (() => void) | undefined;
+
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      unsubscribe?.();
+      resolveDone();
+    };
+
+    timer = setTimeout(finish, POST_WRITE_LSP_WAIT_MS);
+    timer.unref?.();
+    unsubscribe = manager.onChange(() => {
+      if (!postWriteServerCandidates(filePath).some((server) => server.state === "starting")) finish();
+    });
+  });
+}
+
+function hasPostWriteProblems(message: string): boolean {
+  return message.includes("LSP diagnostics detected") || message.includes("LSP diagnostics were not available");
+}
+
+function unavailableDiagnosticsSummary(filePath: string): string {
+  const diagnosticsCandidates = postWriteServerCandidates(filePath, "diagnostics");
+  const pending = diagnosticsCandidates.filter((server) => server.state === "starting").map((server) => server.spec.displayName);
+  const unavailable = diagnosticsCandidates
+    .filter((server) => server.state === "failed" || server.state === "dead")
+    .map((server) => `${server.spec.displayName}: ${stateText(server)}`);
+
+  const parts: string[] = [];
+  if (pending.length > 0) parts.push(`still starting: ${pending.join(", ")}`);
+  if (unavailable.length > 0) parts.push(`unavailable: ${unavailable.join("; ")}`);
+
+  return parts.length > 0
+    ? `LSP diagnostics were not available for this file (${parts.join("; ")}). Do not treat this edit/write as LSP-clean.`
+    : "";
+}
+
 async function postWriteLspMessage(filePath: string): Promise<string> {
+  await waitForPostWriteServers(filePath);
+
   const formatters = manager.getReadyFormattersForFile(filePath);
   const diagnosticsServers = manager.getReadyDiagnosticsServersForFile(filePath);
+  const parts: string[] = [];
 
-  if (formatters.length === 0 && diagnosticsServers.length === 0) return "";
+  if (formatters.length === 0 && diagnosticsServers.length === 0) {
+    return unavailableDiagnosticsSummary(filePath);
+  }
 
   const formattedBy = await runFormatters(formatters);
   const diagnostics = await collectDiagnostics(diagnosticsServers);
   const diagnosticsBlock = renderDiagnosticsBlock(filePath, diagnostics);
-  const parts: string[] = [];
 
   if (formattedBy.length > 0) {
     parts.push(`LSP formatted this file with ${formattedBy.join(", ")}.`);
@@ -392,7 +771,12 @@ async function postWriteLspMessage(filePath: string): Promise<string> {
   }
 
   if (diagnosticsBlock) {
-    parts.push(`LSP errors detected in this file. Fix them before finishing:\n${diagnosticsBlock}`);
+    parts.push(`LSP diagnostics detected in this file. Fix errors and actionable warnings before finishing:\n${diagnosticsBlock}`);
+  }
+
+  if (diagnosticsServers.length === 0) {
+    const unavailable = unavailableDiagnosticsSummary(filePath);
+    if (unavailable) parts.push(unavailable);
   }
 
   return parts.length > 0 ? parts.join("\n") : "";
@@ -667,6 +1051,18 @@ export default function (pi: ExtensionAPI) {
     manager.shutdownNow();
   });
 
+  pi.on("tool_call", async (event) => {
+    if (!isToolCallEventType("bash", event)) return undefined;
+
+    const detected = detectManualCheckCommand(event.input.command);
+    if (!detected) return undefined;
+
+    return {
+      block: true,
+      reason: `Manual lint/format/typecheck command blocked (${detected}). LSP post-write hooks already format supported files and collect diagnostics after edit/write. Do not retry with another wrapper, path, or cd; rely on the LSP result and report that local policy blocks manual lint/format/typecheck commands.`,
+    };
+  });
+
   pi.on("tool_result", async (event) => {
     if (event.toolName !== "edit" && event.toolName !== "write") return;
     if (event.isError) return;
@@ -682,6 +1078,7 @@ export default function (pi: ExtensionAPI) {
         ...event.content,
         { type: "text" as const, text: `\n\n${message}` },
       ],
+      ...(hasPostWriteProblems(message) ? { isError: true } : {}),
     };
   });
 

@@ -52,6 +52,7 @@ export class LspManager {
         entry.spec.id,
         entry.spec.displayName,
         entry.spec.command,
+        this.projectRoot,
         entry.spec.workspaceRoot,
         () => {
           if (generation !== this.generation) return;

@@ -3,6 +3,12 @@ import { readFile, writeFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as rpc from "vscode-jsonrpc/node";
+import {
+  configurationSection,
+  initializationOptionsForServer,
+  loadLspWorkspaceSettings,
+  type LspWorkspaceSettings,
+} from "./settings.js";
 
 export type LspClientState = "starting" | "ready" | "failed" | "dead";
 
@@ -255,14 +261,18 @@ export class LspClient {
   private openFiles = new Set<string>();
   private fileVersions = new Map<string, number>();
   private fileTexts = new Map<string, string>();
+  private readonly workspaceSettings: LspWorkspaceSettings;
 
   constructor(
     public readonly id: string,
     public readonly displayName: string,
     private readonly lspCommand: LspCommand,
+    projectRoot: string,
     private readonly workspaceRoot: string,
     private readonly onStateChange: () => void,
-  ) {}
+  ) {
+    this.workspaceSettings = loadLspWorkspaceSettings(projectRoot, workspaceRoot);
+  }
 
   start(): void {
     if (this.process) return;
@@ -306,7 +316,11 @@ export class LspClient {
     });
 
     this.connection.onRequest("workspace/configuration", (params: any) => {
-      return (params.items ?? []).map(() => ({}));
+      const items = Array.isArray(params?.items) ? params.items : [];
+      return items.map((item: any) => configurationSection(
+        this.workspaceSettings,
+        typeof item?.section === "string" ? item.section : undefined,
+      ));
     });
 
     this.connection.onRequest("client/registerCapability", (params: any) => {
@@ -354,11 +368,13 @@ export class LspClient {
 
   private async initialize(): Promise<void> {
     try {
+      const initializationOptions = initializationOptionsForServer(this.id, this.workspaceSettings);
       const result: any = await withTimeout(
         this.connection!.sendRequest("initialize", {
           processId: process.pid,
           rootUri: pathToUri(this.workspaceRoot),
           workspaceFolders: [{ uri: pathToUri(this.workspaceRoot), name: this.displayName }],
+          ...(initializationOptions !== undefined ? { initializationOptions } : {}),
           capabilities: {
             window: { workDoneProgress: true },
             textDocument: {
@@ -371,6 +387,8 @@ export class LspClient {
             },
             workspace: {
               workspaceFolders: true,
+              configuration: true,
+              didChangeConfiguration: { dynamicRegistration: false },
               applyEdit: true,
               symbol: { dynamicRegistration: false },
               diagnostics: { refreshSupport: false },
