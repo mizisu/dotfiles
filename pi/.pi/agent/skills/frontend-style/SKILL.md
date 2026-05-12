@@ -183,6 +183,46 @@ When an export loses its last consumer, remove it. Unused exports are dead code 
 
 Be deliberate about import direction. When module A depends on B and B starts to depend on A, extract the shared piece into a third module rather than creating a cycle.
 
+### Use exhaustive switches for enum/union transformations
+
+When transforming an enum or discriminated union, use `switch` with `shouldBeNeverType` so new variants fail at compile time. Avoid implicit fallback branches like "otherwise TEXT/NUMBER".
+
+```tsx
+// ✅ — adding a new GoalCustomFieldType produces a compile error here
+switch (customField.type) {
+  case GoalCustomFieldType.SELECT:
+    return { ...common, type: customField.type, options: normalizeOptions(customField.options) };
+  case GoalCustomFieldType.RATING_CRITERIA:
+    return { ...common, type: customField.type, ratingCriteria: normalizeCriteria(customField.ratingCriteria) };
+  case GoalCustomFieldType.TEXT:
+  case GoalCustomFieldType.NUMBER:
+    return { ...common, type: customField.type };
+  default:
+    return shouldBeNeverType(customField);
+}
+
+// ❌ — a future enum member silently falls through
+if (customField.type === GoalCustomFieldType.SELECT) return { ... };
+if (customField.type === GoalCustomFieldType.RATING_CRITERIA) return { ... };
+return { ...common, type: customField.type };
+```
+
+### Avoid identical type aliases
+
+Don't create a new type name if it is only an alias for the same shape. It suggests a boundary that does not really exist.
+
+```tsx
+// ✅ — one name because the shapes are actually the same
+type GoalCycleCommonRequest = {
+  goalItemCustomFields?: GoalCustomFieldInput[];
+};
+
+// ❌ — two names, no additional constraint
+export type GoalCustomFieldRequest = GoalCustomFieldInput;
+```
+
+Create a separate request/input type only when the shape or constraints really differ.
+
 ---
 
 ## React Rules
@@ -298,6 +338,20 @@ If a piece of UI appears in exactly one place, keep it inline. Extracting a comp
 ```
 
 The same applies to custom hooks: if a hook wraps a single `useState` + effect for one component, keep the logic in that component.
+
+Exception: split single-use components when they represent distinct domain variants. If one component has many `type`/`mode` branches, different schemas, different required fields, or different submit payloads, splitting by variant is simpler even if each child has one caller.
+
+```tsx
+// ✅ — each modal has one fixed schema and one output shape
+<PlainTypeFormModal fieldType={GoalCustomFieldType.TEXT} ... />
+<SelectTypeFormModal ... />
+<RatingCriteriaTypeFormModal ... />
+
+// ❌ — one modal knows every variant and branches internally
+<GoalCustomFieldModal mode="edit" defaultValues={customField} ... />
+```
+
+Use a single discriminated-union form only when the discriminator is actually edited inside that form or the UI genuinely renders mixed variants together.
 
 ### Heavy logic belongs inside Modal/Drawer children
 
@@ -424,6 +478,27 @@ useEffect(() => {
 }, [review?.reviewType]);
 ```
 
+### Persist client identity for unsaved reorderable items
+
+Editable/reorderable lists need stable React keys and DnD IDs. Use backend `entityId` when available; for unsaved items, generate a client `_key` once and preserve it in the owner state or form value until save.
+
+Do not derive keys from editable values (`name`, `label`) or ordering (`index`, `order`). Do not call `v4()` during render or prop mapping unless the generated value is immediately stored and round-tripped. `useMemo` is not a reliable fix when values pass through AntD Form or another controlled parent that creates new references.
+
+```tsx
+// ✅ — once assigned, _key survives form-state round trips
+type CustomFieldFormValue = CustomFieldInput & { _key?: string };
+
+const [fields, setFields] = useControllableState<readonly InternalField[]>({
+  prop: value?.map(field => ({ ...field, _key: field._key ?? field.entityId ?? v4() })),
+  onChange: current => onChange?.(current.map((field, index) => ({ ...field, order: index + 1 }))),
+});
+
+// Request mapper explicitly picks request fields, so _key does not leak.
+
+// ❌ — key changes when the user renames or reorders the item
+const key = field.entityId ?? `${field.type}-${field.order}-${field.name}`;
+```
+
 ---
 
 ## Performance
@@ -509,6 +584,38 @@ export const createTemplateFolderAPI = createMutationAPI({
 
 Legacy `axios` wrapper classes should be replaced with contract-based APIs when touched.
 
+### Normalize response/form/request shapes at boundaries
+
+Do not let UI components accept both server response shapes and form input shapes. If the API response differs from the form shape, normalize it before passing it into the component. Put response/request conversions in the data mapper layer, not in a catch-all UI `utils.ts`.
+
+```tsx
+// ✅ — response shape is normalized before it reaches the form component
+export function goalCustomFieldFromResponse(field: GoalCustomField): GoalCustomFieldInput {
+  const common = pickCommonFieldValues(field);
+
+  switch (field.type) {
+    case GoalCustomFieldType.SELECT:
+      return { ...common, type: field.type, options: field.options };
+    case GoalCustomFieldType.RATING_CRITERIA:
+      return { ...common, type: field.type, ratingCriteria: field.ratingCriteria };
+    case GoalCustomFieldType.TEXT:
+    case GoalCustomFieldType.NUMBER:
+      return { ...common, type: field.type };
+    default:
+      return shouldBeNeverType(field.type);
+  }
+}
+
+<Form.Item initialValue={goalCycle.goalItemCustomFields.map(goalCustomFieldFromResponse)}>
+  <GoalCustomFieldSection />
+</Form.Item>
+
+// ❌ — component accepts response/input/internal shapes and normalizes inside UI utils
+type EditableCustomField = GoalCustomField | GoalCustomFieldInput;
+```
+
+Boundary mapper functions should usually have explicit return types so response-only fields and UI-only fields cannot leak across layers.
+
 ### Use `fallbackData` and Suspense patterns for loading states
 
 Prefer SWR's `fallbackData` to initial-loading spinners when a reasonable default exists. Use Suspense boundaries for declarative loading when the architecture supports it. The goal is to make the happy path the default code path.
@@ -564,6 +671,28 @@ const { control } = useForm({
 // ❌ — resolver captured at module level; stale i18n
 const FormSchemaResolver = zodResolver(formSchema());
 ```
+
+### Reset form state from canonical data after save
+
+When a mutation creates server IDs, canonical ordering, or other normalized values, avoid injecting raw response objects into nested form fields. Prefer refetching/mutating the canonical data source, normalizing through the mapper, and resetting only the affected field if needed.
+
+```tsx
+// ✅ — refetch canonical data, then remount the field with normalized initialValue
+await goalCycleList.refetch();
+setCustomFieldsResetKey(key => key + 1);
+
+<Form.Item
+  key={customFieldsResetKey}
+  initialValue={goalCycle.goalItemCustomFields.map(goalCustomFieldFromResponse)}
+>
+  <GoalCustomFieldSection />
+</Form.Item>
+
+// ❌ — raw response shape is patched directly into a nested form value
+form.setFieldValue('customFields', updatedGoalCycle.goalItemCustomFields);
+```
+
+Also ensure primary-save synchronization is not blocked by secondary side effects. If a follow-up API call can fail independently, use `try`/`finally` or split the flow so refetch/reset still happens after the primary save succeeds.
 
 ---
 
@@ -719,6 +848,17 @@ const receivers = receiverEntityIds.flatMap(entityId => {
   return person ? [person] : [];
 });
 ```
+
+### Avoid catch-all UI `utils.ts` files
+
+Before creating a `utils.ts`, identify the boundary each function belongs to.
+
+- API response/request conversion → data mapper layer
+- modal default/submit conversion → modal or caller
+- UI-only key/order management → state owner component
+- reused domain calculation → named domain utility
+
+If a file mixes response normalization, form defaults, request conversion, and UI keys, split the responsibilities or inline the single-use logic where it belongs.
 
 ### Codemods for cross-cutting changes
 
