@@ -1,7 +1,8 @@
 local M = {}
 
 function M.is_git_repo()
-  return vim.fn.isdirectory(".git") == 1
+  local output = vim.fn.system({ "git", "rev-parse", "--is-inside-work-tree" })
+  return vim.v.shell_error == 0 and vim.trim(output) == "true"
 end
 
 function M.get_base_ref()

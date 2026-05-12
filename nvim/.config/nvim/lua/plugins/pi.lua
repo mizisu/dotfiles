@@ -18,13 +18,7 @@ local function buffer_path()
     return nil
   end
 
-  local dir = vim.fn.fnamemodify(absolute_path, ":h")
-  local git_root = run({ "git", "-C", dir, "rev-parse", "--show-toplevel" })
-  if git_root and vim.startswith(absolute_path, git_root .. "/") then
-    return absolute_path:sub(#git_root + 2)
-  end
-
-  return vim.fn.fnamemodify(absolute_path, ":.")
+  return vim.fn.fnamemodify(absolute_path, ":p")
 end
 
 local function target_pane()
@@ -109,8 +103,8 @@ local function visual_reference()
     return nil
   end
 
-  local start_line = vim.fn.getpos("'<")[2]
-  local end_line = vim.fn.getpos("'>")[2]
+  local start_line = vim.fn.line("v")
+  local end_line = vim.fn.line(".")
   if start_line > end_line then
     start_line, end_line = end_line, start_line
   end
