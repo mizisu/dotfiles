@@ -1,7 +1,8 @@
 import { complete, type Message } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { DynamicBorder } from "@mariozechner/pi-coding-agent";
-import { Key, matchesKey, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
+import { Key, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
+import { createCommandWorking, type CommandWorking } from "./shared/command-working.js";
 
 const MAX_CONTEXT_BYTES = 60_000;
 const MAX_ANSWER_BYTES = 20_000;
@@ -138,24 +139,21 @@ export default function btwExtension(pi: ExtensionAPI) {
   const threads: BtwThread[] = [];
   let nextId = 1;
   let uiRef: any;
+  let workingRef: CommandWorking | undefined;
 
   function updateWidget(): void {
     if (!uiRef) return;
-    if (threads.length === 0) {
-      uiRef.setWidget("btw", undefined);
-      return;
+
+    const pendingThreads = threads.filter((thread) => thread.status === "pending");
+    if (workingRef) {
+      if (pendingThreads.length === 0) {
+        workingRef.clear();
+      } else {
+        workingRef.set(`Answering ${pendingThreads.length} /btw question${pendingThreads.length === 1 ? "" : "s"}…`);
+      }
     }
 
-    const pending = threads.filter((thread) => thread.status === "pending").length;
-    const done = threads.filter((thread) => thread.status === "done").length;
-    const errors = threads.filter((thread) => thread.status === "error").length;
-    const parts = [
-      pending ? `${pending} ⏳` : "",
-      done ? `${done} ✓` : "",
-      errors ? `${errors} ✗` : "",
-    ].filter(Boolean);
-
-    uiRef.setWidget("btw", [`/btw ${parts.join("  ")} — /btw to review`]);
+    uiRef.setWidget("btw", undefined);
   }
 
   function removeThread(thread: BtwThread): void {
@@ -215,6 +213,7 @@ export default function btwExtension(pi: ExtensionAPI) {
   function clearThreads(): void {
     for (const thread of threads) thread.abort.abort();
     threads.length = 0;
+    workingRef?.clear();
     updateWidget();
   }
 
@@ -225,6 +224,8 @@ export default function btwExtension(pi: ExtensionAPI) {
 
   pi.on("session_shutdown", () => {
     clearThreads();
+    workingRef?.clear();
+    workingRef = undefined;
     uiRef = undefined;
   });
 
@@ -326,11 +327,18 @@ export default function btwExtension(pi: ExtensionAPI) {
           }
         },
       };
+    }, {
+      overlay: true,
+      overlayOptions: {
+        width: "80%",
+        minWidth: 50,
+        maxHeight: "80%",
+      },
     });
   }
 
   pi.registerCommand("btw", {
-    description: "Ask a quick side question in the background. Use /btw with no args to review results.",
+    description: "Ask a quick side question in the background. Use /btw with no args to open result popup.",
     handler: async (args, ctx) => {
       if (!ctx.hasUI) {
         ctx.ui.notify("/btw requires interactive mode", "error");
@@ -355,6 +363,7 @@ export default function btwExtension(pi: ExtensionAPI) {
         return;
       }
 
+      workingRef ??= createCommandWorking(ctx, "btw", "BTW");
       const thread: BtwThread = {
         id: nextId++,
         question: text,

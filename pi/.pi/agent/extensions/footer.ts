@@ -1,8 +1,96 @@
+import { execFile } from "node:child_process";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 
 const BAR_WIDTH = 12;
 const FOOTER_PADDING = " ";
+const FOOTER_BOTTOM_PADDING_LINES = 1;
+const GIT_DIFF_REFRESH_MS = 3000;
+const GIT_DIFF_TIMEOUT_MS = 1000;
+const GIT_DIFF_MAX_BUFFER = 4 * 1024 * 1024;
+
+type GitDiffStats = {
+  files: number;
+  added: number;
+  modified: number;
+  deleted: number;
+};
+
+function readGitDiff(cwd: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      "git",
+      ["diff", "--no-color", "--no-ext-diff", "--unified=0", "HEAD", "--"],
+      { cwd, timeout: GIT_DIFF_TIMEOUT_MS, maxBuffer: GIT_DIFF_MAX_BUFFER },
+      (error, stdout) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+
+        resolve(String(stdout));
+      },
+    );
+  });
+}
+
+function parseGitDiffStats(diff: string): GitDiffStats | null {
+  let files = 0;
+  let added = 0;
+  let modified = 0;
+  let deleted = 0;
+  let addRun = 0;
+  let deleteRun = 0;
+
+  const flushRun = () => {
+    if (addRun === 0 && deleteRun === 0) return;
+
+    const paired = Math.min(addRun, deleteRun);
+    modified += paired;
+    added += addRun - paired;
+    deleted += deleteRun - paired;
+    addRun = 0;
+    deleteRun = 0;
+  };
+
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("diff --git ")) {
+      flushRun();
+      files += 1;
+      continue;
+    }
+
+    if (line.startsWith("\\")) continue;
+
+    if (line.startsWith("+")) {
+      if (line.startsWith("+++ ")) {
+        flushRun();
+      } else {
+        addRun += 1;
+      }
+      continue;
+    }
+
+    if (line.startsWith("-")) {
+      if (line.startsWith("--- ")) {
+        flushRun();
+      } else {
+        deleteRun += 1;
+      }
+      continue;
+    }
+
+    flushRun();
+  }
+
+  flushRun();
+
+  return files > 0 ? { files, added, modified, deleted } : null;
+}
+
+async function loadGitDiffStats(cwd: string): Promise<GitDiffStats | null> {
+  return parseGitDiffStats(await readGitDiff(cwd));
+}
 
 function formatTokens(count: number): string {
   if (!Number.isFinite(count) || count <= 0) return "?";
@@ -38,7 +126,22 @@ function renderContextUsage(theme: any, ctx: ExtensionContext): string {
   return `${theme.fg(color, `[${bar}]`)} ${theme.fg(color, `${percentText}${windowText}`)}`;
 }
 
-function renderCwd(ctx: ExtensionContext, branch: string | null): string {
+function renderGitDiffStats(theme: any, stats: GitDiffStats | null, compact: boolean): string | null {
+  if (!stats || stats.files <= 0) return null;
+
+  const fileText = compact
+    ? `Δ${stats.files}`
+    : `${stats.files} file${stats.files === 1 ? "" : "s"} changed`;
+  const parts = [theme.fg("dim", fileText)];
+
+  if (stats.added > 0) parts.push(theme.fg("success", `+${stats.added}`));
+  if (stats.modified > 0) parts.push(theme.fg("warning", `~${stats.modified}`));
+  if (stats.deleted > 0) parts.push(theme.fg("error", `-${stats.deleted}`));
+
+  return parts.join(" ");
+}
+
+function formatCwd(ctx: ExtensionContext): string {
   let cwd = ctx.cwd;
   const home = process.env.HOME || process.env.USERPROFILE;
 
@@ -46,7 +149,43 @@ function renderCwd(ctx: ExtensionContext, branch: string | null): string {
     cwd = `~${cwd.slice(home.length)}`;
   }
 
-  return branch ? `${cwd} (${branch})` : cwd;
+  return cwd;
+}
+
+function truncateCwdWithBranch(cwd: string, branchSuffix: string, width: number): string | null {
+  const branchWidth = visibleWidth(branchSuffix);
+  const cwdWidth = width - branchWidth;
+
+  if (branchSuffix && cwdWidth < 4) return null;
+  return `${truncateToWidth(cwd, cwdWidth, "...")}${branchSuffix}`;
+}
+
+function paddedCwdLine(
+  theme: any,
+  ctx: ExtensionContext,
+  branch: string | null,
+  stats: GitDiffStats | null,
+  width: number,
+): string {
+  const innerWidth = footerContentWidth(width);
+  const cwd = formatCwd(ctx);
+  const branchSuffix = branch ? ` (${branch})` : "";
+  const plainCwd = `${cwd}${branchSuffix}`;
+
+  for (const compact of [false, true]) {
+    const statsText = renderGitDiffStats(theme, stats, compact);
+    if (!statsText) break;
+
+    const availableCwdWidth = innerWidth - visibleWidth(statsText) - 1;
+    if (availableCwdWidth < 8) continue;
+
+    const cwdText = truncateCwdWithBranch(cwd, branchSuffix, availableCwdWidth);
+    if (!cwdText) continue;
+
+    return `${FOOTER_PADDING}${theme.fg("dim", cwdText)} ${statsText}`;
+  }
+
+  return paddedLine(theme.fg("dim", plainCwd), width);
 }
 
 function renderModel(pi: ExtensionAPI, ctx: ExtensionContext): string {
@@ -83,10 +222,46 @@ function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
   if (!ctx.hasUI) return;
 
   ctx.ui.setFooter((tui, theme, footerData) => {
-    const unsubscribeBranch = footerData.onBranchChange(() => tui.requestRender());
+    let diffStats: GitDiffStats | null = null;
+    let refreshInFlight = false;
+    let disposed = false;
+
+    const refreshDiffStats = async () => {
+      if (disposed || refreshInFlight) return;
+
+      if (!footerData.getGitBranch()) {
+        if (diffStats !== null) {
+          diffStats = null;
+          tui.requestRender();
+        }
+        return;
+      }
+
+      refreshInFlight = true;
+      try {
+        diffStats = await loadGitDiffStats(ctx.cwd);
+      } catch {
+        diffStats = null;
+      } finally {
+        refreshInFlight = false;
+      }
+
+      if (!disposed) tui.requestRender();
+    };
+
+    const interval = setInterval(() => void refreshDiffStats(), GIT_DIFF_REFRESH_MS);
+    const unsubscribeBranch = footerData.onBranchChange(() => {
+      void refreshDiffStats();
+      tui.requestRender();
+    });
+    void refreshDiffStats();
 
     return {
-      dispose: unsubscribeBranch,
+      dispose() {
+        disposed = true;
+        clearInterval(interval);
+        unsubscribeBranch();
+      },
       invalidate() {},
       render(width: number): string[] {
         const lines: string[] = [];
@@ -96,12 +271,13 @@ function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
           lines.push(theme.fg("dim", paddedLine(`Session: ${sessionName}`, width)));
         }
 
-        const cwdLine = renderCwd(ctx, footerData.getGitBranch());
+        const branch = footerData.getGitBranch();
         const contextLine = renderContextUsage(theme, ctx);
         const modelLine = theme.fg("dim", renderModel(pi, ctx));
 
-        lines.push(theme.fg("dim", paddedLine(cwdLine, width)));
+        lines.push(paddedCwdLine(theme, ctx, branch, diffStats, width));
         lines.push(paddedLeftRight(contextLine, modelLine, width));
+        lines.push(...Array.from({ length: FOOTER_BOTTOM_PADDING_LINES }, () => ""));
 
         return lines;
       },

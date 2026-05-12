@@ -117,25 +117,31 @@ function extractText(content: unknown): string {
     .join("\n");
 }
 
-function getOnlyRealUserMessageText(ctx: ExtensionContext): string | undefined {
-  const userMessages: string[] = [];
-
+function getFirstRealUserMessageText(ctx: ExtensionContext): string | undefined {
   for (const entry of ctx.sessionManager.getBranch()) {
     if (entry.type !== "message" || entry.message.role !== "user") continue;
 
     const text = extractText(entry.message.content).trim();
     if (!text) continue;
 
-    userMessages.push(text);
-    if (userMessages.length > 1) return undefined;
+    return text.length > MAX_INPUT_CHARS
+      ? `${text.slice(0, MAX_INPUT_CHARS).trim()}…`
+      : text;
   }
 
-  const [firstUserMessage] = userMessages;
-  if (!firstUserMessage) return undefined;
+  return undefined;
+}
 
-  return firstUserMessage.length > MAX_INPUT_CHARS
-    ? `${firstUserMessage.slice(0, MAX_INPUT_CHARS).trim()}…`
-    : firstUserMessage;
+function fallbackTitle(input: string): string {
+  const normalized = input
+    .replace(/<[^>]+>/g, " ")
+    .replace(/[@`"'“”‘’]+/g, "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!normalized) return "새 세션";
+  return normalized.slice(0, MAX_TITLE_LENGTH).trim() || "새 세션";
 }
 
 function cleanTitle(raw: string): string | undefined {
@@ -195,7 +201,6 @@ async function generateTitle(ctx: ExtensionContext, firstUserMessage: string, si
       apiKey: auth.apiKey,
       headers: auth.headers,
       maxTokens: 64,
-      temperature: 0.5,
       cacheRetention: "none",
       signal,
     },
@@ -235,7 +240,7 @@ export default function (pi: ExtensionAPI) {
     if (namingInFlight) return;
     if (pi.getSessionName()) return;
 
-    const firstUserMessage = getOnlyRealUserMessageText(ctx);
+    const firstUserMessage = getFirstRealUserMessageText(ctx);
     if (!firstUserMessage) return;
 
     namingInFlight = true;
@@ -243,8 +248,8 @@ export default function (pi: ExtensionAPI) {
     setStatus(ctx, "naming session...");
 
     try {
-      const title = await generateTitle(ctx, firstUserMessage, abortController.signal);
-      if (!title) return;
+      const generatedTitle = await generateTitle(ctx, firstUserMessage, abortController.signal);
+      const title = generatedTitle ?? fallbackTitle(firstUserMessage);
 
       // Do not overwrite a name that was set while the small model was running.
       if (pi.getSessionName()) return;
@@ -252,12 +257,18 @@ export default function (pi: ExtensionAPI) {
       pi.setSessionName(title);
     } catch {
       // Automatic naming should never interrupt the user's main workflow.
+      const title = fallbackTitle(firstUserMessage);
+      if (!pi.getSessionName()) pi.setSessionName(title);
     } finally {
       abortController = undefined;
       namingInFlight = false;
       clearStatus(ctx);
     }
   }
+
+  pi.on("session_start", (_event, ctx) => {
+    void maybeGenerateSessionName(ctx);
+  });
 
   pi.on("agent_end", (_event, ctx) => {
     void maybeGenerateSessionName(ctx);
