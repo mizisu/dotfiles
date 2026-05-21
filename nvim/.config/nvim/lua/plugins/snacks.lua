@@ -3,6 +3,14 @@ local snacks = require("snacks")
 return {
   "snacks.nvim",
   opts = {
+    lazygit = {
+      win = {
+        width = 0,
+        height = 0,
+        border = "none",
+        backdrop = false,
+      },
+    },
     picker = {
       hidden = true,
       win = {
