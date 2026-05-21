@@ -7,6 +7,15 @@ type SensitivePathRule = {
   reason: string;
 };
 
+type ToolCallContentBlock = {
+  type: "toolCall";
+  name: string;
+  arguments: Record<string, unknown>;
+};
+
+const REDACTED_SENSITIVE_WRITE_CONTENT = "[REDACTED: sensitive file write content omitted]";
+const REDACTED_SENSITIVE_EDIT_TEXT = "[REDACTED: sensitive file edit text omitted]";
+
 const SENSITIVE_PATH_RULES: SensitivePathRule[] = [
   {
     patterns: [".env", ".env.*"],
@@ -63,11 +72,91 @@ function findSensitiveCommandRule(command: string): SensitivePathRule | undefine
     .find((rule) => rule !== undefined);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isToolCallContentBlock(block: unknown): block is ToolCallContentBlock {
+  return (
+    isRecord(block) &&
+    block.type === "toolCall" &&
+    typeof block.name === "string" &&
+    isRecord(block.arguments)
+  );
+}
+
+function redactSensitiveWriteEditCall(block: unknown): unknown {
+  if (!isToolCallContentBlock(block)) return block;
+  if (block.name !== "write" && block.name !== "edit") return block;
+
+  const filePath = block.arguments.path;
+  if (typeof filePath !== "string") return block;
+  if (!findSensitivePathRule(filePath)) return block;
+
+  if (block.name === "write") {
+    return {
+      ...block,
+      arguments: {
+        ...block.arguments,
+        content: REDACTED_SENSITIVE_WRITE_CONTENT,
+      },
+    };
+  }
+
+  return {
+    ...block,
+    arguments: {
+      ...block.arguments,
+      edits: [{ oldText: REDACTED_SENSITIVE_EDIT_TEXT, newText: REDACTED_SENSITIVE_EDIT_TEXT }],
+    },
+  };
+}
+
+function redactSensitiveAssistantMessage<T extends { role: string; content?: unknown }>(message: T): T | undefined {
+  if (message.role !== "assistant" || !Array.isArray(message.content)) return undefined;
+
+  let modified = false;
+  const content = message.content.map((block) => {
+    const redactedBlock = redactSensitiveWriteEditCall(block);
+    if (redactedBlock !== block) modified = true;
+    return redactedBlock;
+  });
+
+  return modified ? ({ ...message, content } as T) : undefined;
+}
+
+function redactSensitiveMessages<T extends { role: string; content?: unknown }>(messages: T[]): { messages: T[]; modified: boolean } {
+  let modified = false;
+  const redactedMessages = messages.map((message) => {
+    const redactedMessage = redactSensitiveAssistantMessage(message);
+    if (!redactedMessage) return message;
+
+    modified = true;
+    return redactedMessage;
+  });
+
+  return { messages: redactedMessages, modified };
+}
+
 function sensitivePathReason(action: "Reading" | "Modifying", filePath: string, rule: SensitivePathRule): string {
   return `${action} ${filePath} is blocked because ${rule.reason}.`;
 }
 
 export default function (pi: ExtensionAPI) {
+  pi.on("message_end", async (event) => {
+    const redactedMessage = redactSensitiveAssistantMessage(event.message);
+    if (redactedMessage) return { message: redactedMessage };
+
+    return undefined;
+  });
+
+  pi.on("context", async (event) => {
+    const result = redactSensitiveMessages(event.messages);
+    if (result.modified) return { messages: result.messages };
+
+    return undefined;
+  });
+
   pi.on("tool_call", async (event) => {
     if (isToolCallEventType("read", event)) {
       const rule = findSensitivePathRule(event.input.path);
