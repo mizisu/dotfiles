@@ -195,10 +195,14 @@ source ~/.orbstack/shell/init.zsh 2>/dev/null || :
 # Run Sublime Text in terminal
 export PATH="/Applications/Sublime Text.app/Contents/SharedSupport/bin:$PATH"
 
+if command -v wt >/dev/null 2>&1; then eval "$(command wt config shell init zsh)"; fi
+
+# Node Version Manager
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+
 # Powerlevel10k theme
 source /opt/homebrew/share/powerlevel10k/powerlevel10k.zsh-theme
 # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
 [[ -f ~/.p10k.zsh ]] && source ~/.p10k.zsh
-
-
-if command -v wt >/dev/null 2>&1; then eval "$(command wt config shell init zsh)"; fi

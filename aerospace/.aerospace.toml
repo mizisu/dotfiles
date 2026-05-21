@@ -222,6 +222,15 @@ on-mode-changed = []
     alt-shift-k = ['join-with up', 'mode main']
     alt-shift-l = ['join-with right', 'mode main']
 
+# Floating app rules
+[[on-window-detected]]
+if.app-id = 'com.microsoft.Excel'
+run = 'layout floating'
+
+[[on-window-detected]]
+if.app-id = 'com.apple.finder'
+run = 'layout floating'
+
 # App to workspace assignments
 # Apps will automatically move to their assigned workspace when opened
 [[on-window-detected]]
