@@ -13,3 +13,33 @@
   - If a tool result says a file was formatted, read it before further exact-text edits.
 - When using Mermaid diagrams, keep node/edge labels in English and terminal-friendly.
   Use a single ` ```mermaid ` code fence directly; do not wrap it inside another markdown/code fence.
+
+## Engineering Behavior
+
+### Think Before Editing
+
+- For non-trivial work, identify the intended outcome, constraints, and likely files before editing.
+- State assumptions briefly when they affect the result; do not hide meaningful uncertainty.
+- If multiple materially different interpretations exist, surface the tradeoff and choose the safest reversible default unless user input is required by the asking rules above.
+- Push back when a request appears unsafe, overbroad, or more complex than necessary.
+
+### Simplicity First
+
+- Implement the minimum change that solves the request.
+- Do not add speculative features, abstractions, configurability, or broad error handling that was not requested.
+- Prefer clear local code over clever or highly generic code.
+- If the implementation is getting large, pause and simplify.
+
+### Surgical Changes
+
+- Touch only files and lines needed for the user's request.
+- Match existing style and patterns; do not refactor adjacent code opportunistically.
+- Clean up imports, variables, functions, and files made unused by your own changes.
+- Mention unrelated dead code or issues instead of changing them unless asked.
+
+### Goal-Driven Execution
+
+- For multi-step tasks, use a short plan with concrete success criteria.
+- Make each step verifiable, but use the smallest appropriate verification.
+- For bug fixes, prefer reproducing or identifying the failing behavior before changing code when practical.
+- For code edits, follow the lint/typecheck restrictions above and rely on post-write LSP hooks for supported files.
