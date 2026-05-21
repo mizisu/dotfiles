@@ -18,8 +18,15 @@ import { formatCommand, formatRoot } from "./servers.js";
 
 const manager = new LspManager();
 const MAX_DIAGNOSTICS_PER_FILE = 20;
+const MAX_DIAGNOSTIC_FILES = 8;
 const POST_WRITE_LSP_WAIT_MS = 5_000;
 const SYMBOL_PICKER_LIMIT = 50;
+const BIOME_CODE_ACTION_KINDS = [
+  "source.fixAll.biome",
+  "source.organizeImports.biome",
+  "source.fixAll",
+  "source.organizeImports",
+] as const;
 const DIAGNOSTIC_SEVERITY_RANK: Record<Diagnostic["severity"], number> = {
   error: 0,
   warning: 1,
@@ -194,20 +201,47 @@ function formatDiagnostic(diagnostic: Diagnostic): string {
   return `${label} [${diagnostic.line}:${column}] ${diagnostic.message}${source}`;
 }
 
-function renderDiagnosticsBlock(filePath: string, diagnostics: Diagnostic[]): string {
-  const actionable = dedupeDiagnostics(diagnostics)
+function compareDiagnostics(a: Diagnostic, b: Diagnostic): number {
+  const severity = DIAGNOSTIC_SEVERITY_RANK[a.severity] - DIAGNOSTIC_SEVERITY_RANK[b.severity];
+  if (severity !== 0) return severity;
+  return a.line - b.line || a.character - b.character || a.message.localeCompare(b.message);
+}
+
+function actionableDiagnostics(diagnostics: Diagnostic[]): Diagnostic[] {
+  return dedupeDiagnostics(diagnostics)
     .filter((diagnostic) => diagnostic.severity === "error" || diagnostic.severity === "warning")
-    .sort((a, b) => {
-      const severity = DIAGNOSTIC_SEVERITY_RANK[a.severity] - DIAGNOSTIC_SEVERITY_RANK[b.severity];
-      if (severity !== 0) return severity;
-      return a.line - b.line || a.character - b.character || a.message.localeCompare(b.message);
-    });
+    .sort(compareDiagnostics);
+}
+
+function renderDiagnosticsGroup(filePath: string, diagnostics: Diagnostic[]): string {
+  if (diagnostics.length === 0) return "";
+
+  const shown = diagnostics.slice(0, MAX_DIAGNOSTICS_PER_FILE);
+  const more = diagnostics.length - shown.length;
+  const suffix = more > 0 ? `\n... and ${more} more` : "";
+  return `<diagnostics file="${projectRelative(filePath)}">\n${shown.map(formatDiagnostic).join("\n")}${suffix}\n</diagnostics>`;
+}
+
+function renderDiagnosticsBlocks(defaultFilePath: string, diagnostics: Diagnostic[]): string {
+  const actionable = actionableDiagnostics(diagnostics);
   if (actionable.length === 0) return "";
 
-  const shown = actionable.slice(0, MAX_DIAGNOSTICS_PER_FILE);
-  const more = actionable.length - shown.length;
-  const suffix = more > 0 ? `\n... and ${more} more` : "";
-  return `<diagnostics file="${filePath}">\n${shown.map(formatDiagnostic).join("\n")}${suffix}\n</diagnostics>`;
+  const targetPath = resolveProjectFilePath(defaultFilePath);
+  const byFile = new Map<string, Diagnostic[]>();
+  for (const diagnostic of actionable) {
+    const filePath = diagnostic.file || targetPath;
+    byFile.set(filePath, [...(byFile.get(filePath) ?? []), diagnostic]);
+  }
+
+  const groups = [...byFile.entries()].sort(([a], [b]) => {
+    if (a === targetPath) return -1;
+    if (b === targetPath) return 1;
+    return projectRelative(a).localeCompare(projectRelative(b));
+  });
+  const shown = groups.slice(0, MAX_DIAGNOSTIC_FILES);
+  const more = groups.length - shown.length;
+  const suffix = more > 0 ? `\n... and diagnostics in ${more} more file(s)` : "";
+  return `${shown.map(([filePath, items]) => renderDiagnosticsGroup(filePath, items)).join("\n")}${suffix}`;
 }
 
 function projectRelative(filePath: string): string {
@@ -664,11 +698,29 @@ async function runFormatters(servers: ReadyLspServer[]): Promise<string[]> {
   return applied;
 }
 
+async function runBiomeFixers(servers: ReadyLspServer[]): Promise<string[]> {
+  const applied: string[] = [];
+
+  for (const server of servers) {
+    if (server.spec.id !== "biome") continue;
+
+    try {
+      const actions = await server.client.runCodeActions(server.absolutePath, BIOME_CODE_ACTION_KINDS);
+      if (actions.length > 0) applied.push(server.spec.displayName);
+    } catch {
+      // Fixes are best-effort. Diagnostics still run below.
+    }
+  }
+
+  return applied;
+}
+
 async function collectDiagnostics(servers: ReadyLspServer[]): Promise<Diagnostic[]> {
   const results = await Promise.all(
     servers.map(async (server) => {
       try {
-        return await server.client.collectDiagnostics(server.absolutePath, "document");
+        const mode = server.spec.id === "vtsls" ? "full" : "document";
+        return await server.client.collectDiagnostics(server.absolutePath, mode);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return [{
@@ -753,6 +805,7 @@ function unavailableDiagnosticsSummary(filePath: string): string {
 async function postWriteLspMessage(filePath: string): Promise<string> {
   await waitForPostWriteServers(filePath);
 
+  const fileServers = manager.getReadyServersForFile(filePath);
   const formatters = manager.getReadyFormattersForFile(filePath);
   const diagnosticsServers = manager.getReadyDiagnosticsServersForFile(filePath);
   const parts: string[] = [];
@@ -762,16 +815,30 @@ async function postWriteLspMessage(filePath: string): Promise<string> {
   }
 
   const formattedBy = await runFormatters(formatters);
+  const fixedBy = await runBiomeFixers(fileServers);
+  if (fixedBy.length > 0) {
+    for (const formatter of await runFormatters(formatters)) {
+      if (!formattedBy.includes(formatter)) formattedBy.push(formatter);
+    }
+  }
+
   const diagnostics = await collectDiagnostics(diagnosticsServers);
-  const diagnosticsBlock = renderDiagnosticsBlock(filePath, diagnostics);
+  const diagnosticsBlock = renderDiagnosticsBlocks(filePath, diagnostics);
 
   if (formattedBy.length > 0) {
     parts.push(`LSP formatted this file with ${formattedBy.join(", ")}.`);
+  }
+
+  if (fixedBy.length > 0) {
+    parts.push(`LSP applied safe fixes with ${fixedBy.join(", ")}.`);
+  }
+
+  if (formattedBy.length > 0 || fixedBy.length > 0) {
     parts.push("The file changed after the tool call. Read it before relying on exact text matches.");
   }
 
   if (diagnosticsBlock) {
-    parts.push(`LSP diagnostics detected in this file. Fix errors and actionable warnings before finishing:\n${diagnosticsBlock}`);
+    parts.push(`LSP diagnostics detected. Fix errors and actionable warnings before finishing:\n${diagnosticsBlock}`);
   }
 
   if (diagnosticsServers.length === 0) {
@@ -1059,7 +1126,7 @@ export default function (pi: ExtensionAPI) {
 
     return {
       block: true,
-      reason: `Manual lint/format/typecheck command blocked (${detected}). LSP post-write hooks already format supported files and collect diagnostics after edit/write. Do not retry with another wrapper, path, or cd; rely on the LSP result and report that local policy blocks manual lint/format/typecheck commands.`,
+      reason: `Manual lint/format/typecheck command blocked (${detected}). LSP post-write hooks already format/fix supported files and collect diagnostics after edit/write. Do not retry with another wrapper, path, or cd; rely on the LSP result and report that local policy blocks manual lint/format/typecheck commands.`,
     };
   });
 

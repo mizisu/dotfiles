@@ -70,6 +70,9 @@ const DIAGNOSTICS_DEBOUNCE_MS = 150;
 const DIAGNOSTICS_DOCUMENT_WAIT_TIMEOUT_MS = 5_000;
 const DIAGNOSTICS_FULL_WAIT_TIMEOUT_MS = 10_000;
 const DIAGNOSTICS_REQUEST_TIMEOUT_MS = 3_000;
+const CODE_ACTION_TIMEOUT_MS = 5_000;
+const CODE_ACTION_RESOLVE_TIMEOUT_MS = 3_000;
+const EXECUTE_COMMAND_TIMEOUT_MS = 5_000;
 const FILE_CHANGE_CREATED = 1;
 const FILE_CHANGE_CHANGED = 2;
 
@@ -108,6 +111,20 @@ const SYMBOL_KIND: Record<number, string> = {
   25: "Operator",
   26: "TypeParameter",
 };
+
+const CODE_ACTION_KIND_VALUES = [
+  "",
+  "quickfix",
+  "refactor",
+  "refactor.extract",
+  "refactor.inline",
+  "refactor.rewrite",
+  "source",
+  "source.organizeImports",
+  "source.organizeImports.biome",
+  "source.fixAll",
+  "source.fixAll.biome",
+];
 
 function uriToPath(uri: string): string {
   try {
@@ -220,6 +237,61 @@ function applyTextEdits(text: string, edits: any[]): string {
   return nextText;
 }
 
+function validTextEdits(edits: any): any[] {
+  return Array.isArray(edits)
+    ? edits.filter((edit) => edit?.range?.start && edit?.range?.end)
+    : [];
+}
+
+function workspaceEditEntries(edit: any): Array<{ filePath: string; edits: any[] }> {
+  const byFile = new Map<string, any[]>();
+  const add = (uri: unknown, edits: any) => {
+    if (typeof uri !== "string") return;
+    const valid = validTextEdits(edits);
+    if (valid.length === 0) return;
+    const filePath = uriToPath(uri);
+    byFile.set(filePath, [...(byFile.get(filePath) ?? []), ...valid]);
+  };
+
+  if (edit?.changes && typeof edit.changes === "object") {
+    for (const [uri, edits] of Object.entries(edit.changes)) add(uri, edits);
+  }
+
+  if (Array.isArray(edit?.documentChanges)) {
+    for (const change of edit.documentChanges) {
+      add(change?.textDocument?.uri, change?.edits);
+    }
+  }
+
+  return [...byFile.entries()].map(([filePath, edits]) => ({ filePath, edits }));
+}
+
+function hasWorkspaceEdit(value: any): boolean {
+  return Boolean(value && typeof value === "object" && (value.changes || value.documentChanges));
+}
+
+function codeActionKindMatches(actionKind: unknown, requestedKind: string): boolean {
+  if (typeof actionKind !== "string" || !actionKind) return true;
+  return actionKind === requestedKind
+    || actionKind.startsWith(`${requestedKind}.`)
+    || requestedKind.startsWith(`${actionKind}.`);
+}
+
+function lspCommandParams(command: any): { command: string; arguments?: any[] } | undefined {
+  if (typeof command === "string") return { command };
+  if (!command || typeof command.command !== "string") return undefined;
+
+  const params: { command: string; arguments?: any[] } = { command: command.command };
+  if (Array.isArray(command.arguments)) params.arguments = command.arguments;
+  return params;
+}
+
+function codeActionTitle(action: any, fallback: string): string {
+  if (typeof action?.title === "string" && action.title) return action.title;
+  if (typeof action?.command?.title === "string" && action.command.title) return action.command.title;
+  return fallback;
+}
+
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
@@ -261,6 +333,7 @@ export class LspClient {
   private openFiles = new Set<string>();
   private fileVersions = new Map<string, number>();
   private fileTexts = new Map<string, string>();
+  private workspaceEditGeneration = 0;
   private readonly workspaceSettings: LspWorkspaceSettings;
 
   constructor(
@@ -323,6 +396,16 @@ export class LspClient {
       ));
     });
 
+    this.connection.onRequest("workspace/applyEdit", async (params: any) => {
+      try {
+        await this.applyWorkspaceEdit(params?.edit);
+        return { applied: true };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return { applied: false, failureReason: message };
+      }
+    });
+
     this.connection.onRequest("client/registerCapability", (params: any) => {
       let changed = false;
       for (const registration of params.registrations ?? []) {
@@ -382,6 +465,12 @@ export class LspClient {
               publishDiagnostics: { relatedInformation: true, versionSupport: true },
               diagnostic: { dynamicRegistration: true, relatedDocumentSupport: true },
               formatting: { dynamicRegistration: false },
+              codeAction: {
+                dynamicRegistration: false,
+                dataSupport: true,
+                resolveSupport: { properties: ["edit", "command"] },
+                codeActionLiteralSupport: { codeActionKind: { valueSet: CODE_ACTION_KIND_VALUES } },
+              },
               definition: { dynamicRegistration: false, linkSupport: true },
               references: { dynamicRegistration: false },
             },
@@ -390,6 +479,8 @@ export class LspClient {
               configuration: true,
               didChangeConfiguration: { dynamicRegistration: false },
               applyEdit: true,
+              workspaceEdit: { documentChanges: true },
+              executeCommand: { dynamicRegistration: false },
               symbol: { dynamicRegistration: false },
               diagnostics: { refreshSupport: false },
               didChangeWatchedFiles: { dynamicRegistration: true, relativePatternSupport: false },
@@ -431,6 +522,10 @@ export class LspClient {
 
   supportsFormatting(): boolean {
     return Boolean(this.serverCapabilities?.documentFormattingProvider);
+  }
+
+  supportsCodeActions(): boolean {
+    return Boolean(this.serverCapabilities?.codeActionProvider);
   }
 
   private usesIncrementalSync(): boolean {
@@ -504,10 +599,12 @@ export class LspClient {
 
   async collectDiagnostics(filePath: string, mode: DiagnosticMode = "document"): Promise<Diagnostic[]> {
     const absPath = resolve(filePath);
+    if (mode === "full") this.pullDiagnostics.clear();
+
     const after = Date.now();
     const version = await this.notifyChanged(absPath);
     await this.waitForDiagnostics({ path: absPath, version, mode, after });
-    return this.getDiagnostics(absPath);
+    return mode === "full" ? this.getAllDiagnostics() : this.getDiagnostics(absPath);
   }
 
   async waitForDiagnostics(request: { path: string; version: number; mode?: DiagnosticMode; after?: number }): Promise<void> {
@@ -528,7 +625,12 @@ export class LspClient {
       if (remaining <= 0) return;
 
       const event = await Promise.race([
-        this.waitForFreshPush({ path: absPath, version: request.version, after: startedAt, timeout: remaining }).then((hit) => hit ? "push" : "timeout"),
+        this.waitForFreshPush({
+          path: mode === "full" ? undefined : absPath,
+          version: mode === "full" ? undefined : request.version,
+          after: startedAt,
+          timeout: remaining,
+        }).then((hit) => hit ? "push" : "timeout"),
         this.waitForRegistrationChange(remaining).then((hit) => hit ? "registration" : "timeout"),
         delay(Math.min(250, remaining)).then(() => "tick"),
       ]);
@@ -566,9 +668,39 @@ export class LspClient {
     return true;
   }
 
+  async runCodeActions(filePath: string, onlyKinds: readonly string[]): Promise<string[]> {
+    await this.ensureReady();
+    if (!this.supportsCodeActions()) return [];
+
+    const absPath = resolve(filePath);
+    const applied: string[] = [];
+
+    for (const onlyKind of onlyKinds) {
+      await this.notifyChanged(absPath);
+      const actions = await this.requestCodeActions(absPath, onlyKind);
+      const candidates = actions.filter((action) => action && !action.disabled && codeActionKindMatches(action.kind, onlyKind));
+
+      for (const action of candidates) {
+        if (await this.applyCodeAction(action)) {
+          applied.push(codeActionTitle(action, onlyKind));
+          break;
+        }
+      }
+    }
+
+    return applied;
+  }
+
   getDiagnostics(filePath: string): Diagnostic[] {
     const absPath = resolve(filePath);
     return dedupeDiagnostics([...(this.pushDiagnostics.get(absPath) ?? []), ...(this.pullDiagnostics.get(absPath) ?? [])]);
+  }
+
+  getAllDiagnostics(): Diagnostic[] {
+    return dedupeDiagnostics([
+      ...[...this.pushDiagnostics.values()].flat(),
+      ...[...this.pullDiagnostics.values()].flat(),
+    ]);
   }
 
   async workspaceSymbol(query: string): Promise<WorkspaceSymbol[]> {
@@ -617,6 +749,80 @@ export class LspClient {
     return parseLocations(result);
   }
 
+  private async requestCodeActions(filePath: string, onlyKind: string): Promise<any[]> {
+    const text = this.fileTexts.get(filePath) ?? await readFile(filePath, "utf8");
+    const result: any = await withTimeout(
+      this.connection!.sendRequest("textDocument/codeAction", {
+        textDocument: { uri: pathToUri(filePath) },
+        range: fullDocumentRange(text),
+        context: {
+          diagnostics: [],
+          only: [onlyKind],
+          triggerKind: 1,
+        },
+      }),
+      CODE_ACTION_TIMEOUT_MS,
+      `${this.displayName} textDocument/codeAction timed out`,
+    ).catch(() => []);
+
+    return Array.isArray(result) ? result : [];
+  }
+
+  private async resolveCodeAction(action: any): Promise<any> {
+    const provider = this.serverCapabilities?.codeActionProvider;
+    const isCommandOnly = typeof action?.command === "string" && !action.kind && !action.data && !action.edit;
+    if (isCommandOnly || action?.edit || !(provider && typeof provider === "object" && provider.resolveProvider)) return action;
+
+    return withTimeout(
+      this.connection!.sendRequest("codeAction/resolve", action),
+      CODE_ACTION_RESOLVE_TIMEOUT_MS,
+      `${this.displayName} codeAction/resolve timed out`,
+    ).catch(() => action);
+  }
+
+  private async applyCodeAction(action: any): Promise<boolean> {
+    const resolved = await this.resolveCodeAction(action);
+    let changed = false;
+
+    if (hasWorkspaceEdit(resolved?.edit)) {
+      changed = await this.applyWorkspaceEdit(resolved.edit) || changed;
+    }
+
+    const command = typeof resolved?.command === "string" ? resolved : resolved?.command;
+    const params = lspCommandParams(command);
+    if (params) {
+      const before = this.workspaceEditGeneration;
+      const result: any = await withTimeout(
+        this.connection!.sendRequest("workspace/executeCommand", params),
+        EXECUTE_COMMAND_TIMEOUT_MS,
+        `${this.displayName} workspace/executeCommand timed out`,
+      ).catch(() => undefined);
+
+      if (hasWorkspaceEdit(result)) changed = await this.applyWorkspaceEdit(result) || changed;
+      if (this.workspaceEditGeneration > before) changed = true;
+    }
+
+    return changed;
+  }
+
+  private async applyWorkspaceEdit(edit: any): Promise<boolean> {
+    const entries = workspaceEditEntries(edit);
+    let changed = false;
+
+    for (const { filePath, edits } of entries) {
+      const original = await readFile(filePath, "utf8");
+      const updated = applyTextEdits(original, edits);
+      if (updated === original) continue;
+
+      await writeFile(filePath, updated, "utf8");
+      changed = true;
+      await this.notifyChanged(filePath).catch(() => {});
+    }
+
+    if (changed) this.workspaceEditGeneration += 1;
+    return changed;
+  }
+
   private async requestDocumentDiagnostics(filePath: string): Promise<{ handled: boolean; matched: boolean }> {
     const identifiers = this.documentDiagnosticIdentifiers();
     const supportsDocumentPull = this.serverCapabilities?.diagnosticProvider || this.hasDocumentDiagnosticRegistration();
@@ -630,12 +836,17 @@ export class LspClient {
 
   private async requestFullDiagnostics(filePath: string): Promise<{ handled: boolean; matched: boolean }> {
     const documentIdentifiers = this.documentDiagnosticIdentifiers();
-    const workspaceIdentifiers = this.workspaceDiagnosticIdentifiers();
+    const workspaceCapabilityIdentifier = this.workspaceDiagnosticCapabilityIdentifier();
+    const workspaceIdentifiers = this.workspaceDiagnosticIdentifiers()
+      .filter((identifier) => identifier !== workspaceCapabilityIdentifier);
     const requests = [
       ...(this.serverCapabilities?.diagnosticProvider || this.hasDocumentDiagnosticRegistration()
         ? [this.requestDiagnosticReport(filePath)]
         : []),
       ...documentIdentifiers.map((identifier) => this.requestDiagnosticReport(filePath, identifier)),
+      ...(this.hasWorkspaceDiagnosticCapability()
+        ? [this.requestWorkspaceDiagnosticReport(workspaceCapabilityIdentifier)]
+        : []),
       ...workspaceIdentifiers.map((identifier) => this.requestWorkspaceDiagnosticReport(identifier)),
     ];
 
@@ -731,6 +942,18 @@ export class LspClient {
       .some((registration) => registration.registerOptions?.workspaceDiagnostics !== true);
   }
 
+  private hasWorkspaceDiagnosticCapability(): boolean {
+    const provider = this.serverCapabilities?.diagnosticProvider;
+    return Boolean(provider && typeof provider === "object" && provider.workspaceDiagnostics);
+  }
+
+  private workspaceDiagnosticCapabilityIdentifier(): string | undefined {
+    const provider = this.serverCapabilities?.diagnosticProvider;
+    return provider && typeof provider === "object" && typeof provider.identifier === "string"
+      ? provider.identifier
+      : undefined;
+  }
+
   private documentDiagnosticIdentifiers(): string[] {
     return [
       ...new Set(
@@ -753,7 +976,7 @@ export class LspClient {
     ];
   }
 
-  private waitForFreshPush(request: { path: string; version: number; after: number; timeout: number }): Promise<boolean> {
+  private waitForFreshPush(request: { path?: string; version?: number; after: number; timeout: number }): Promise<boolean> {
     if (request.timeout <= 0) return Promise.resolve(false);
 
     return new Promise((resolve) => {
@@ -768,23 +991,24 @@ export class LspClient {
         resolve(value);
       };
 
-      const check = () => {
-        const hit = this.published.get(request.path);
+      const check = (filePath: string) => {
+        const hit = this.published.get(filePath);
         if (!hit) return;
-        if (typeof hit.version === "number" && hit.version !== request.version) return;
-        if (hit.at < request.after && hit.version !== request.version) return;
+        if (request.path && typeof hit.version === "number" && hit.version !== request.version) return;
+        if (hit.at < request.after && (!request.path || hit.version !== request.version)) return;
         if (debounceTimer) clearTimeout(debounceTimer);
         debounceTimer = setTimeout(() => finish(true), Math.max(0, DIAGNOSTICS_DEBOUNCE_MS - (Date.now() - hit.at)));
         debounceTimer.unref?.();
       };
 
       const listener = (filePath: string) => {
-        if (filePath === request.path) check();
+        if (!request.path || filePath === request.path) check(filePath);
       };
       const timeoutTimer = setTimeout(() => finish(false), request.timeout);
       timeoutTimer.unref?.();
       this.diagnosticsListeners.add(listener);
-      check();
+      if (request.path) check(request.path);
+      else for (const filePath of this.published.keys()) check(filePath);
     });
   }
 

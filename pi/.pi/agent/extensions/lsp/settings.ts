@@ -18,6 +18,13 @@ const DEFAULT_CONFIGURATION: JsonObject = {
   eslint: {
     workingDirectories: [{ mode: "auto" }],
   },
+  // Ask vtsls/tsserver for project-wide diagnostics instead of opened-file-only diagnostics.
+  typescript: {
+    tsserver: { experimental: { enableProjectDiagnostics: true } },
+  },
+  javascript: {
+    tsserver: { experimental: { enableProjectDiagnostics: true } },
+  },
 };
 
 function isPlainObject(value: unknown): value is JsonObject {
