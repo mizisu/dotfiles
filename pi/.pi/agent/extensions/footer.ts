@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { resolve as resolvePath } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 
@@ -12,15 +14,14 @@ const GIT_DIFF_MAX_BUFFER = 4 * 1024 * 1024;
 type GitDiffStats = {
   files: number;
   added: number;
-  modified: number;
   deleted: number;
 };
 
-function readGitDiff(cwd: string): Promise<string> {
+function execGit(cwd: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
       "git",
-      ["diff", "--no-color", "--no-ext-diff", "--unified=0", "HEAD", "--"],
+      args,
       { cwd, timeout: GIT_DIFF_TIMEOUT_MS, maxBuffer: GIT_DIFF_MAX_BUFFER },
       (error, stdout) => {
         if (error) {
@@ -34,62 +35,78 @@ function readGitDiff(cwd: string): Promise<string> {
   });
 }
 
+function readGitDiff(cwd: string): Promise<string> {
+  return execGit(cwd, ["diff", "--no-color", "--no-ext-diff", "--unified=0", "HEAD", "--"]);
+}
+
+function readGitUntrackedFiles(cwd: string): Promise<string> {
+  return execGit(cwd, ["ls-files", "--others", "--exclude-standard", "-z"]);
+}
+
 function parseGitDiffStats(diff: string): GitDiffStats | null {
   let files = 0;
   let added = 0;
-  let modified = 0;
   let deleted = 0;
-  let addRun = 0;
-  let deleteRun = 0;
-
-  const flushRun = () => {
-    if (addRun === 0 && deleteRun === 0) return;
-
-    const paired = Math.min(addRun, deleteRun);
-    modified += paired;
-    added += addRun - paired;
-    deleted += deleteRun - paired;
-    addRun = 0;
-    deleteRun = 0;
-  };
 
   for (const line of diff.split("\n")) {
     if (line.startsWith("diff --git ")) {
-      flushRun();
       files += 1;
       continue;
     }
 
-    if (line.startsWith("\\")) continue;
-
-    if (line.startsWith("+")) {
-      if (line.startsWith("+++ ")) {
-        flushRun();
-      } else {
-        addRun += 1;
-      }
+    if (line.startsWith("+") && !line.startsWith("+++ ")) {
+      added += 1;
       continue;
     }
 
-    if (line.startsWith("-")) {
-      if (line.startsWith("--- ")) {
-        flushRun();
-      } else {
-        deleteRun += 1;
-      }
-      continue;
+    if (line.startsWith("-") && !line.startsWith("--- ")) {
+      deleted += 1;
     }
-
-    flushRun();
   }
 
-  flushRun();
+  return files > 0 ? { files, added, deleted } : null;
+}
 
-  return files > 0 ? { files, added, modified, deleted } : null;
+function parseGitUntrackedFiles(output: string): string[] {
+  if (!output) return [];
+  return output.split("\0").filter(Boolean);
+}
+
+function countBufferLines(buffer: Buffer): number {
+  if (buffer.length === 0) return 0;
+
+  let lines = 0;
+  for (const byte of buffer) {
+    if (byte === 0x0a) lines += 1;
+  }
+
+  return buffer[buffer.length - 1] === 0x0a ? lines : lines + 1;
+}
+
+async function countUntrackedFileLines(cwd: string, file: string): Promise<number> {
+  try {
+    return countBufferLines(await readFile(resolvePath(cwd, file)));
+  } catch {
+    return 0;
+  }
 }
 
 async function loadGitDiffStats(cwd: string): Promise<GitDiffStats | null> {
-  return parseGitDiffStats(await readGitDiff(cwd));
+  const [diff, untrackedOutput] = await Promise.all([
+    readGitDiff(cwd),
+    readGitUntrackedFiles(cwd),
+  ]);
+  const stats = parseGitDiffStats(diff) ?? { files: 0, added: 0, deleted: 0 };
+  const untrackedFiles = parseGitUntrackedFiles(untrackedOutput);
+
+  const untrackedLineCounts = await Promise.all(
+    untrackedFiles.map((file) => countUntrackedFileLines(cwd, file)),
+  );
+
+  stats.files += untrackedFiles.length;
+  stats.added += untrackedLineCounts.reduce((total, lines) => total + lines, 0);
+
+  return stats.files > 0 ? stats : null;
 }
 
 function formatTokens(count: number): string {
@@ -135,7 +152,6 @@ function renderGitDiffStats(theme: any, stats: GitDiffStats | null, compact: boo
   const parts = [theme.fg("dim", fileText)];
 
   if (stats.added > 0) parts.push(theme.fg("success", `+${stats.added}`));
-  if (stats.modified > 0) parts.push(theme.fg("warning", `~${stats.modified}`));
   if (stats.deleted > 0) parts.push(theme.fg("error", `-${stats.deleted}`));
 
   return parts.join(" ");

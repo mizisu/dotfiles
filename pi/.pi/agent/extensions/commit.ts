@@ -1,9 +1,9 @@
 import { complete, type Message } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { Box, Text } from "@mariozechner/pi-tui";
 import { open, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { registerSuccessMessageRenderer } from "./shared/success-message-renderer.js";
 import { resolveMediumModel } from "./shared/model-slots.js";
 import { createCommandWorking } from "./shared/command-working.js";
 
@@ -81,6 +81,15 @@ interface UntrackedPreview {
   path: string;
   preview: string;
   note?: string;
+}
+
+interface PushSummary {
+  text: string;
+  failed: boolean;
+}
+
+interface CommitMessageDetails {
+  status?: "success" | "failed";
 }
 
 function trimTrailingSlash(value: string): string {
@@ -348,9 +357,8 @@ function appendIndentedLines(lines: string[], text: string, indent: string): voi
   for (const line of text.split("\n")) lines.push(line ? `${indent}${line}` : "");
 }
 
-function appendCommitMessageDetails(lines: string[], commit: PlanCommit, heading: string): void {
-  lines.push(heading);
-  lines.push(`   ${commit.subject}`);
+function appendCommitMessageDetails(lines: string[], commit: PlanCommit, index: number): void {
+  lines.push(`${index}. ${commit.subject}`);
   if (!commit.description) return;
 
   lines.push("");
@@ -361,7 +369,7 @@ function appendCommitMessageDetails(lines: string[], commit: PlanCommit, heading
 function formatCompletedCommits(commits: PlanCommit[]): string {
   const lines: string[] = [];
   for (const [index, commit] of commits.entries()) {
-    appendCommitMessageDetails(lines, commit, `${index + 1}. Message`);
+    appendCommitMessageDetails(lines, commit, index + 1);
     if (index < commits.length - 1) lines.push("");
   }
   return lines.join("\n");
@@ -475,7 +483,7 @@ function formatPlan(commits: PlanCommit[], warnings: string[], sensitiveSkipped:
   }
 
   for (const [index, commit] of commits.entries()) {
-    appendCommitMessageDetails(lines, commit, `${index + 1}. Message`);
+    appendCommitMessageDetails(lines, commit, index + 1);
     lines.push("");
     lines.push("   Files");
     const entries = Object.entries(commit.files).map(([file, spec]) => spec === "all" ? file : `${file} (hunks ${spec.join(", ")})`);
@@ -563,18 +571,18 @@ async function promptPushAfterCommits(
   root: string,
   ctx: any,
   setStatus: (text: string | undefined) => void,
-): Promise<string> {
+): Promise<PushSummary> {
   const branch = await currentBranchName(pi, root);
   if (!branch) {
-    ctx.ui.notify("Commits created, but push skipped because HEAD is detached", "warning");
-    return "Push: skipped (detached HEAD)";
+    ctx.ui.notify("Commits created; push skipped because HEAD is detached", "info");
+    return { text: "✓ Push skipped (detached HEAD)", failed: false };
   }
 
   const upstream = await upstreamBranchName(pi, root);
   const target = upstream ?? `origin/${branch}`;
   const pushChoice = `Push to ${target} (Recommended)`;
   const choice = await ctx.ui.select(`Created commits on ${branch}. Push now?`, [pushChoice, "Skip push"]);
-  if (choice !== pushChoice) return "Push: skipped";
+  if (choice !== pushChoice) return { text: "✓ Push skipped", failed: false };
 
   setStatus(`Pushing to ${target}…`);
   const result = await git(pi, root, upstream ? ["push"] : ["push", "-u", "origin", "HEAD"], 300_000);
@@ -583,11 +591,11 @@ async function promptPushAfterCommits(
   if (result.code !== 0) {
     const output = resultText(result) || "git push failed";
     ctx.ui.notify(`Push failed:\n${truncateText(output, 5_000, "[push output truncated]")}`, "error");
-    return `Push: failed to ${target}`;
+    return { text: `✗ Push failed to ${target}`, failed: true };
   }
 
   ctx.ui.notify(`Pushed to ${target}`, "info");
-  return `Push: pushed to ${target}`;
+  return { text: `✓ Pushed to ${target}`, failed: false };
 }
 
 async function hasStagedChanges(pi: ExtensionAPI, root: string): Promise<boolean> {
@@ -726,6 +734,26 @@ async function resolveCommitFailure(
   }
 }
 
+function commitMessageText(content: string | Array<{ type?: string; text?: string }>): string {
+  if (typeof content === "string") return content;
+  return content
+    .filter((part): part is { type: string; text: string } => part?.type === "text" && typeof part.text === "string")
+    .map((part) => part.text)
+    .join("\n");
+}
+
+function registerCommitMessageRenderer(pi: ExtensionAPI): void {
+  pi.registerMessageRenderer<CommitMessageDetails>("commit", (message, _options, theme) => {
+    const text = commitMessageText(message.content);
+    const failed = message.details?.status === "failed" || /(^|\n)(?:✗|Push: failed|Push failed)/.test(text);
+    const header = theme.fg("text", theme.bold("[commit]"));
+    const body = theme.fg("text", text);
+    const box = new Box(1, 1, (value) => theme.bg(failed ? "toolErrorBg" : "toolSuccessBg", value));
+    box.addChild(new Text(`${header}\n${body}`, 0, 0));
+    return box;
+  });
+}
+
 async function createPlan(ctx: any, input: string): Promise<{ text: string; modelReference: string }> {
   const resolved = await resolveMediumModel(ctx);
   const messages: Message[] = [{
@@ -746,7 +774,7 @@ async function createPlan(ctx: any, input: string): Promise<{ text: string; mode
 }
 
 export default function commitExtension(pi: ExtensionAPI) {
-  registerSuccessMessageRenderer(pi, "commit");
+  registerCommitMessageRenderer(pi);
 
   pi.registerCommand("commit", {
     description: "Analyze all git changes, split by purpose, create commits after confirmation, and optionally push.",
@@ -877,7 +905,12 @@ export default function commitExtension(pi: ExtensionAPI) {
         const pushSummary = await promptPushAfterCommits(pi, root, ctx, setStatus);
         const summary = formatCompletedCommits(completed);
         pi.sendMessage(
-          { customType: "commit", content: `✓ Created ${completed.length} commit${completed.length === 1 ? "" : "s"}:\n\n${summary}\n\n${pushSummary}`, display: true },
+          {
+            customType: "commit",
+            content: `✓ Created ${completed.length} commit${completed.length === 1 ? "" : "s"}:\n\n${summary}\n\n${pushSummary.text}`,
+            display: true,
+            details: { status: pushSummary.failed ? "failed" : "success" },
+          },
           { triggerTurn: false },
         );
         ctx.ui.notify(`Created ${completed.length} commit${completed.length === 1 ? "" : "s"}`, "info");

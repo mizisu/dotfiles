@@ -1,6 +1,6 @@
 import { complete, type Message } from "@mariozechner/pi-ai";
 import { DynamicBorder, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Input, Key, SelectList, fuzzyFilter, matchesKey, type Component, type Focusable, type SelectItem } from "@mariozechner/pi-tui";
+import { CURSOR_MARKER, Input, Key, SelectList, fuzzyFilter, matchesKey, truncateToWidth, visibleWidth, type Component, type Focusable, type SelectItem } from "@mariozechner/pi-tui";
 import { mkdtemp, readFile, readdir, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -383,10 +383,88 @@ function previewText(title: string, body: string, base: string, current: string)
   return [`${current} → ${base}`, "", title, "─".repeat(40), body, "", "This will push the current branch to origin and create a draft PR."].join("\n");
 }
 
+function renderInputWithPlaceholder(input: Input, placeholder: string, theme: any, width: number): string[] {
+  if (input.getValue()) return input.render(width);
+
+  const prompt = "> ";
+  const availableWidth = width - visibleWidth(prompt);
+  if (availableWidth <= 0) return [prompt];
+
+  const cursor = `${input.focused ? CURSOR_MARKER : ""}\x1b[7m \x1b[27m`;
+  const placeholderWidth = Math.max(0, availableWidth - 1);
+  const placeholderText = placeholderWidth > 0
+    ? theme.fg("dim", truncateToWidth(placeholder, placeholderWidth, "…"))
+    : "";
+  const line = `${prompt}${cursor}${placeholderText}`;
+  return [`${line}${" ".repeat(Math.max(0, width - visibleWidth(line)))}`];
+}
+
+type TitlePromptResult = { cancelled: true } | { value: string };
+
+async function promptTitleWithPlaceholder(
+  ctx: any,
+  heading: string,
+  placeholder: string,
+  fallback: string,
+  emptyAction: string,
+): Promise<string | undefined> {
+  const result = await ctx.ui.custom<TitlePromptResult | undefined>((tui: any, theme: any, _kb: any, done: (value: TitlePromptResult | undefined) => void) => {
+    const borderTop = new DynamicBorder((text: string) => theme.fg("accent", text));
+    const borderBottom = new DynamicBorder((text: string) => theme.fg("accent", text));
+    const input = new Input();
+    input.focused = true;
+
+    const submit = () => done({ value: normalizePrTitle(input.getValue()) || fallback });
+
+    let focused = true;
+    const component: Component & Focusable = {
+      get focused() { return focused; },
+      set focused(value: boolean) { focused = value; input.focused = value; },
+      render(width: number): string[] {
+        const lines: string[] = [];
+        lines.push(...borderTop.render(width));
+        lines.push(` ${theme.fg("accent", theme.bold(heading))}`);
+        lines.push(` ${theme.fg("dim", `Leave empty to ${emptyAction}.`)}`);
+        lines.push("");
+        for (const line of renderInputWithPlaceholder(input, placeholder, theme, width - 2)) lines.push(` ${line}`);
+        lines.push("");
+        lines.push(` ${theme.fg("dim", "enter")} submit  ${theme.fg("dim", "esc")} cancel`);
+        lines.push(...borderBottom.render(width));
+        return lines;
+      },
+      invalidate() {
+        borderTop.invalidate();
+        borderBottom.invalidate();
+        input.invalidate();
+      },
+      handleInput(data: string) {
+        if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
+          done({ cancelled: true });
+          return;
+        }
+        if (matchesKey(data, Key.enter)) {
+          submit();
+          return;
+        }
+        input.handleInput(data);
+        tui.requestRender();
+      },
+    };
+
+    return component;
+  }, { overlay: true });
+
+  if (result === undefined) {
+    const input = await ctx.ui.input(`${heading} (leave empty to ${emptyAction})`, placeholder);
+    if (input === undefined) return undefined;
+    return normalizePrTitle(input) || fallback;
+  }
+  if ("cancelled" in result) return undefined;
+  return result.value;
+}
+
 async function promptPrTitle(ctx: any, suggestedTitle: string): Promise<string | undefined> {
-  const input = await ctx.ui.input("PR title (leave empty to use suggestion)", suggestedTitle);
-  if (input === undefined) return undefined;
-  return normalizePrTitle(input) || suggestedTitle;
+  return promptTitleWithPlaceholder(ctx, "PR title", suggestedTitle, suggestedTitle, "use suggestion");
 }
 
 async function editPrContent(ctx: any, generated: GeneratedPr, base: string, current: string): Promise<GeneratedPr | undefined> {
@@ -400,9 +478,8 @@ async function editPrContent(ctx: any, generated: GeneratedPr, base: string, cur
 
   if (action === "Create draft PR (Recommended)") return generated;
   if (action === "Edit title") {
-    const next = await ctx.ui.input("PR title (leave empty to keep current)", generated.title);
-    if (next === undefined) return undefined;
-    const title = normalizePrTitle(next) || generated.title;
+    const title = await promptTitleWithPlaceholder(ctx, "PR title", generated.title, generated.title, "keep current");
+    if (title === undefined) return undefined;
     return editPrContent(ctx, { ...generated, title }, base, current);
   }
   if (action === "Edit body") {
