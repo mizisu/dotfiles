@@ -2,6 +2,7 @@ auth.json
 sessions/
 node_modules/
 agent-backups/
+agent/handoffs/
 .env
 .env.*
 agent/extensions/mcporter/mcporter-cache.json
