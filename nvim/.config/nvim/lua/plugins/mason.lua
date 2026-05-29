@@ -6,7 +6,7 @@ return {
       "lua-language-server",
       -- Python
       -- "pyrefly",
-      -- "ty",
+      "ty",
       "debugpy",
       "mypy",
       "ruff",

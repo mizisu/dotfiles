@@ -8,6 +8,19 @@ return {
             positionEncodings = { "utf-16" },
           },
         },
+        keys = {
+          { "<leader>ss", false },
+          {
+            "<leader>ss",
+            function()
+              require("utils.ty_workspace_symbols").open()
+            end,
+            desc = "Ty Workspace Symbols",
+            enabled = function(buf)
+              return vim.bo[buf].filetype == "python"
+            end,
+          },
+        },
       },
       -- Explicitly disable null-ls as it's handled by none-ls
       ["null-ls"] = false,
@@ -57,7 +70,7 @@ return {
       --     },
       --   },
       -- },
-      -- ty = {},
+      ty = { enabled = false },
       basedpyright = {
         settings = {
           basedpyright = {

@@ -99,6 +99,13 @@ return {
       desc = "Search class",
     },
     {
+      "<leader>ss",
+      function()
+        require("utils.ty_workspace_symbols").open()
+      end,
+      desc = "Ty Workspace Symbols",
+    },
+    {
       "<leader>ba",
       function()
         snacks.bufdelete.all()
