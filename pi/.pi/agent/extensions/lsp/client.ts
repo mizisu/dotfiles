@@ -122,8 +122,10 @@ const CODE_ACTION_KIND_VALUES = [
   "source",
   "source.organizeImports",
   "source.organizeImports.biome",
+  "source.organizeImports.ruff",
   "source.fixAll",
   "source.fixAll.biome",
+  "source.fixAll.ruff",
 ];
 
 function uriToPath(uri: string): string {
@@ -406,6 +408,13 @@ export class LspClient {
       }
     });
 
+    this.connection.onRequest("window/workDoneProgress/create", () => null);
+    this.connection.onRequest("window/showMessageRequest", () => null);
+    this.connection.onNotification("$/progress", () => {});
+    this.connection.onNotification("window/logMessage", () => {});
+    this.connection.onNotification("window/showMessage", () => {});
+    this.connection.onNotification("telemetry/event", () => {});
+
     this.connection.onRequest("client/registerCapability", (params: any) => {
       let changed = false;
       for (const registration of params.registrations ?? []) {
@@ -568,6 +577,8 @@ export class LspClient {
     await this.ensureReady();
 
     const absPath = resolve(filePath);
+    this.clearDiagnostics(absPath);
+
     if (!this.openFiles.has(absPath)) {
       const version = await this.ensureOpen(absPath);
       await this.connection!.sendNotification("textDocument/didSave", {
@@ -604,7 +615,7 @@ export class LspClient {
     const after = Date.now();
     const version = await this.notifyChanged(absPath);
     await this.waitForDiagnostics({ path: absPath, version, mode, after });
-    return mode === "full" ? this.getAllDiagnostics() : this.getDiagnostics(absPath);
+    return mode === "full" ? this.getAllDiagnostics({ after }) : this.getDiagnostics(absPath, { after });
   }
 
   async waitForDiagnostics(request: { path: string; version: number; mode?: DiagnosticMode; after?: number }): Promise<void> {
@@ -691,14 +702,22 @@ export class LspClient {
     return applied;
   }
 
-  getDiagnostics(filePath: string): Diagnostic[] {
+  getDiagnostics(filePath: string, options: { after?: number } = {}): Diagnostic[] {
     const absPath = resolve(filePath);
-    return dedupeDiagnostics([...(this.pushDiagnostics.get(absPath) ?? []), ...(this.pullDiagnostics.get(absPath) ?? [])]);
+    const pushDiagnostics = this.isFreshPublished(absPath, options.after)
+      ? (this.pushDiagnostics.get(absPath) ?? [])
+      : [];
+
+    return dedupeDiagnostics([...pushDiagnostics, ...(this.pullDiagnostics.get(absPath) ?? [])]);
   }
 
-  getAllDiagnostics(): Diagnostic[] {
+  getAllDiagnostics(options: { after?: number } = {}): Diagnostic[] {
+    const pushDiagnostics = [...this.pushDiagnostics.entries()].flatMap(([filePath, diagnostics]) =>
+      this.isFreshPublished(filePath, options.after) ? diagnostics : [],
+    );
+
     return dedupeDiagnostics([
-      ...[...this.pushDiagnostics.values()].flat(),
+      ...pushDiagnostics,
       ...[...this.pullDiagnostics.values()].flat(),
     ]);
   }
@@ -1028,6 +1047,19 @@ export class LspClient {
       timer.unref?.();
       this.registrationListeners.add(listener);
     });
+  }
+
+  private clearDiagnostics(filePath: string): void {
+    const absPath = resolve(filePath);
+    this.pushDiagnostics.delete(absPath);
+    this.pullDiagnostics.delete(absPath);
+    this.published.delete(absPath);
+  }
+
+  private isFreshPublished(filePath: string, after: number | undefined): boolean {
+    if (after === undefined) return true;
+    const published = this.published.get(resolve(filePath));
+    return Boolean(published && published.at >= after);
   }
 
   private async notifyWatchedFile(filePath: string, type: number): Promise<void> {

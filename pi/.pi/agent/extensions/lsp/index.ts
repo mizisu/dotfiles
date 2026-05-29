@@ -21,12 +21,20 @@ const MAX_DIAGNOSTICS_PER_FILE = 20;
 const MAX_DIAGNOSTIC_FILES = 8;
 const POST_WRITE_LSP_WAIT_MS = 5_000;
 const SYMBOL_PICKER_LIMIT = 50;
-const BIOME_CODE_ACTION_KINDS = [
-  "source.fixAll.biome",
-  "source.organizeImports.biome",
-  "source.fixAll",
-  "source.organizeImports",
-] as const;
+const SAFE_CODE_ACTION_KINDS_BY_SERVER: Record<string, readonly string[]> = {
+  biome: [
+    "source.fixAll.biome",
+    "source.organizeImports.biome",
+    "source.fixAll",
+    "source.organizeImports",
+  ],
+  ruff: [
+    "source.fixAll.ruff",
+    "source.organizeImports.ruff",
+    "source.fixAll",
+    "source.organizeImports",
+  ],
+};
 const DIAGNOSTIC_SEVERITY_RANK: Record<Diagnostic["severity"], number> = {
   error: 0,
   warning: 1,
@@ -698,14 +706,15 @@ async function runFormatters(servers: ReadyLspServer[]): Promise<string[]> {
   return applied;
 }
 
-async function runBiomeFixers(servers: ReadyLspServer[]): Promise<string[]> {
+async function runSafeFixers(servers: ReadyLspServer[]): Promise<string[]> {
   const applied: string[] = [];
 
   for (const server of servers) {
-    if (server.spec.id !== "biome") continue;
+    const codeActionKinds = SAFE_CODE_ACTION_KINDS_BY_SERVER[server.spec.id];
+    if (!codeActionKinds) continue;
 
     try {
-      const actions = await server.client.runCodeActions(server.absolutePath, BIOME_CODE_ACTION_KINDS);
+      const actions = await server.client.runCodeActions(server.absolutePath, codeActionKinds);
       if (actions.length > 0) applied.push(server.spec.displayName);
     } catch {
       // Fixes are best-effort. Diagnostics still run below.
@@ -798,7 +807,7 @@ function unavailableDiagnosticsSummary(filePath: string): string {
   if (unavailable.length > 0) parts.push(`unavailable: ${unavailable.join("; ")}`);
 
   return parts.length > 0
-    ? `LSP diagnostics were not available for this file (${parts.join("; ")}). Do not treat this edit/write as LSP-clean.`
+    ? `Some LSP diagnostics were not available for this file (${parts.join("; ")}). Do not treat this edit/write as fully LSP-clean.`
     : "";
 }
 
@@ -815,7 +824,7 @@ async function postWriteLspMessage(filePath: string): Promise<string> {
   }
 
   const formattedBy = await runFormatters(formatters);
-  const fixedBy = await runBiomeFixers(fileServers);
+  const fixedBy = await runSafeFixers(fileServers);
   if (fixedBy.length > 0) {
     for (const formatter of await runFormatters(formatters)) {
       if (!formattedBy.includes(formatter)) formattedBy.push(formatter);
@@ -841,10 +850,8 @@ async function postWriteLspMessage(filePath: string): Promise<string> {
     parts.push(`LSP diagnostics detected. Fix errors and actionable warnings before finishing:\n${diagnosticsBlock}`);
   }
 
-  if (diagnosticsServers.length === 0) {
-    const unavailable = unavailableDiagnosticsSummary(filePath);
-    if (unavailable) parts.push(unavailable);
-  }
+  const unavailable = unavailableDiagnosticsSummary(filePath);
+  if (unavailable) parts.push(unavailable);
 
   return parts.length > 0 ? parts.join("\n") : "";
 }
