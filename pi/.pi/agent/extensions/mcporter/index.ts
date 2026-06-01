@@ -149,7 +149,7 @@ async function renderStatus(enabled: boolean, ctx?: ExtensionContext): Promise<s
   }
 
   lines.push(`Last error: ${runtime.getLastError() ?? "none"}`);
-  lines.push("", "Use /mcp on to enable, /mcp off to disable, /mcp refresh [server] to refresh metadata.");
+  lines.push("", "Use /mcp auth [server] to run OAuth, /mcp on to enable, /mcp off to disable, /mcp refresh [server] to refresh metadata.");
   return lines.join("\n");
 }
 
@@ -224,6 +224,34 @@ async function refreshMetadata(target: string | undefined, ctx: ExtensionContext
   return lines.join("\n");
 }
 
+async function resolveAuthTarget(requestedTarget: string | undefined, ctx: ExtensionContext): Promise<string> {
+  const definitions = await runtime.getDefinitions(ctx);
+  const names = definitions.map((definition) => definition.name).sort((a, b) => a.localeCompare(b));
+  if (names.length === 0) throw new Error(`No MCP servers configured. ${configHint(join(EXTENSION_DIR, ".env"))}`);
+
+  const requested = requestedTarget?.trim();
+  if (requested) {
+    if (!names.includes(requested)) throw new Error(`Server "${requested}" not found. Configured servers: ${names.join(", ")}`);
+    return requested;
+  }
+
+  const oauthNames = definitions
+    .filter((definition) => definition.auth === "oauth")
+    .map((definition) => definition.name)
+    .sort((a, b) => a.localeCompare(b));
+
+  if (oauthNames.includes("notion")) return "notion";
+  if (oauthNames.length === 1) return oauthNames[0];
+  if (names.length === 1) return names[0];
+
+  throw new Error(`OAuth target is ambiguous. Usage: /mcp auth <server>. Configured servers: ${names.join(", ")}`);
+}
+
+async function authorizeServer(target: string, ctx: ExtensionContext): Promise<string> {
+  const tools = await runtime.authorizeServer(target, ctx);
+  return `OAuth complete for "${target}". Cached ${tools.length} tool${tools.length === 1 ? "" : "s"}.`;
+}
+
 export default function mcporterExtension(pi: ExtensionAPI) {
   let enabled = false;
 
@@ -243,7 +271,7 @@ export default function mcporterExtension(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("mcp", {
-    description: "Manage the mcporter-backed MCP tool. Usage: /mcp [status|on|off|refresh <server>]",
+    description: "Manage the mcporter-backed MCP tool. Usage: /mcp [status|on|off|auth <server>|refresh <server>]",
     handler: async (args, ctx) => {
       const [subcommand = "status", ...rest] = (args ?? "").trim().split(/\s+/).filter(Boolean);
 
@@ -277,6 +305,23 @@ export default function mcporterExtension(pi: ExtensionAPI) {
         return;
       }
 
+      if (subcommand === "auth") {
+        const closeAfterAuth = !enabled;
+        try {
+          await runtime.loadExtensionEnv();
+          const target = await resolveAuthTarget(rest[0], ctx);
+          ctx.ui.setStatus("mcp-auth", `MCP OAuth: ${target}`);
+          ctx.ui.notify(`Starting OAuth for "${target}". Complete the browser flow when it opens.`, "info");
+          ctx.ui.notify(await authorizeServer(target, ctx), "info");
+        } catch (error) {
+          ctx.ui.notify(`OAuth failed: ${sanitizeError(error)}`, "error");
+        } finally {
+          ctx.ui.setStatus("mcp-auth", undefined);
+          if (closeAfterAuth) await runtime.close(true);
+        }
+        return;
+      }
+
       if (subcommand === "refresh") {
         if (!enabled) {
           ctx.ui.notify("mcp tool is disabled. Run /mcp on first.", "warning");
@@ -291,7 +336,7 @@ export default function mcporterExtension(pi: ExtensionAPI) {
         return;
       }
 
-      ctx.ui.notify("Usage: /mcp [status|on|off|refresh <server>]", "warning");
+      ctx.ui.notify("Usage: /mcp [status|on|off|auth <server>|refresh <server>]", "warning");
     },
   });
 
@@ -299,10 +344,11 @@ export default function mcporterExtension(pi: ExtensionAPI) {
     name: TOOL_NAME,
     label: "MCP",
     description: "Access configured MCP servers through mcporter. Start with mcp({}) or mcp({ server: \"name\" }) before calling tools.",
-    promptSnippet: "Access MCP servers through mcporter. Run /mcp on first. Start with mcp({}) or mcp({ server: \"name\" }) before calling tools.",
+    promptSnippet: "Access MCP servers through mcporter. Run /mcp on first and /mcp auth <server> for OAuth servers. Start with mcp({}) or mcp({ server: \"name\" }) before calling tools.",
     promptGuidelines: [
       "Use mcp({}) to inspect configured MCP servers before using MCP tools.",
       "Use mcp({ server: \"name\" }) to list a server's tools.",
+      "For OAuth-backed MCP servers, run /mcp auth <server> before calling protected tools.",
       "Use mcp({ describe: \"server.tool\" }) before mcp({ call: \"server.tool\", args: {...} }).",
     ],
     parameters: mcpParameters,

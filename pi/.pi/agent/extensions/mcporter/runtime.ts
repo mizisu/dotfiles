@@ -318,6 +318,26 @@ export class McpRuntimeManager {
     return { refreshed, failed };
   }
 
+  async authorizeServer(serverName: string, ctx?: ContextLike): Promise<CachedToolInfo[]> {
+    const cache = await this.getCache();
+
+    try {
+      const runtime = await this.ensureRuntime(ctx);
+      await runtime.close(serverName).catch(() => {});
+      const tools = await runtime.listTools(serverName, {
+        includeSchema: true,
+        autoAuthorize: true,
+      });
+      this.lastError = undefined;
+      return updateCachedTools(this.cachePath, cache, serverName, tools);
+    } catch (error) {
+      const message = sanitizeError(error);
+      this.lastError = message;
+      await updateServerError(this.cachePath, cache, serverName, message).catch(() => {});
+      throw error;
+    }
+  }
+
   async resolveToolSelector(selector: string, ctx?: ContextLike, serverHint?: string): Promise<ResolvedToolSelector> {
     const trimmed = selector.trim();
     if (!trimmed) throw new Error("Tool name is required.");
