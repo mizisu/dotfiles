@@ -93,14 +93,22 @@ theme:
       inverted: "#181926"
       faint: "#b8c0e0"
       warning: "#eed49f"
-    success: "#a6da95"
-    error: "#ed8796"
-  background:
-    selected: "#363a4f"
-  border:
-    primary: "#b7bdf8"
-    secondary: "#494d64"
-    faint: "#363a4f"
+      success: "#a6da95"
+      error: "#ed8796"
+      actor: "#c6a0f6"
+    background:
+      selected: "#363a4f"
+    border:
+      primary: "#b7bdf8"
+      secondary: "#494d64"
+      faint: "#363a4f"
+    icon:
+      newcontributor: "#f5a97f"
+      contributor: "#8aadf4"
+      collaborator: "#c6a0f6"
+      member: "#eed49f"
+      owner: "#f5bde6"
+      unknownrole: "#8087a2"
 
 pager:
   diff: diffnav
