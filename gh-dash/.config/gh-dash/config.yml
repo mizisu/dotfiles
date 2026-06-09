@@ -3,7 +3,7 @@ prSections:
   filters: is:open assignee:@me
   type: null
 - title: Needs My Review
-  filters: is:open review-requested:@me
+  filters: is:open review-requested:@me sort:created-desc
   type: null
 - title: Involved
   filters: is:open involves:@me -author:@me

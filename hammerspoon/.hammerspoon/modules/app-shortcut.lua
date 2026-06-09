@@ -12,6 +12,10 @@ function M.setup()
 	hs.hotkey.bind({ "cmd", "shift" }, "3", function()
 		hs.application.open("Slack")
 	end)
+
+	hs.hotkey.bind({ "cmd", "shift" }, "g", function()
+		hs.urlevent.openURL("https://calendar.google.com/")
+	end)
 end
 
 return M

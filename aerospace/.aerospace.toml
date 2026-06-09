@@ -58,20 +58,21 @@ automatically-unhide-macos-hidden-apps = false
 # persistent-workspaces = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C",
 #                          "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O",
 #                          "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"]
-persistent-workspaces = ["Q", "X", "W", "F", "E", "V"]
+persistent-workspaces = ["Q", "X", "W", "F", "E", "V", "C"]
 
 # Assign workspaces to monitors
 # Monitor 1 (Built-in): S, E
 # Monitor 2 (LG HDR 4K): W (Work)
 # Monitor 3 (LG HDR 4K): B (Browser)
 [workspace-to-monitor-force-assignment]
-# 3 monitors: 1(Q,F) / 2(W,X) / 3(E)
-# 2 monitors: 1(Q,F) / 2(W,X,E)
-# 1 monitor:  1(Q,F,W,X,E)
+# 3 monitors: 1(Q,F) / 2(W,X,C) / 3(E)
+# 2 monitors: 1(Q,F) / 2(W,X,C,E)
+# 1 monitor:  1(Q,F,W,X,C,E)
 Q = [1, 'main']           # slack (Q)
 X = [1, 'main']           # Finder
 W = [2, 1, 'main']        # Work (Terminal, DB, Excel, etc.)
 F = [2, 1, 'main']        # eXtra work (임시)
+C = [2, 1, 'main']        # Codex
 E = [3, 2, 1, 'main']     # browsEr
 
 
@@ -175,6 +176,7 @@ on-mode-changed = []
     alt-x = 'workspace X' # Finder
     alt-w = 'workspace W' # Work (Terminal, DB, Excel, etc.)
     alt-f = 'workspace F' # eXtra work (임시)
+    alt-c = 'workspace C' # Codex
     alt-e = 'workspace E' # browsEr
     #
     # See: https://nikitabobko.github.io/AeroSpace/commands#move-node-to-workspace
@@ -192,6 +194,7 @@ on-mode-changed = []
     alt-shift-x = 'move-node-to-workspace X'
     alt-shift-w = 'move-node-to-workspace W'
     alt-shift-f = 'move-node-to-workspace F'
+    alt-shift-c = 'move-node-to-workspace C'
     alt-shift-e = 'move-node-to-workspace E'
     alt-shift-v = 'move-node-to-workspace V'
     #
@@ -244,4 +247,8 @@ run = 'move-node-to-workspace W'
 [[on-window-detected]]
 if.app-id = 'com.google.Chrome'
 run = 'move-node-to-workspace E'
+
+[[on-window-detected]]
+if.app-id = 'com.openai.codex'
+run = 'move-node-to-workspace C'
 
