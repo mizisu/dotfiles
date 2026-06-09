@@ -3,7 +3,9 @@ theme = Catppuccin Macchiato
 # custom-shader = shaders/cursor.glsl
 # custom-shader = shaders/snow.glsl
 # custom-shader = cursor_shaders/cursor_frozen.glsl
-custom-shader = cursor_shaders/cursor_smear_fade.glsl
+# custom-shader = cursor_shaders/cursor_smear_fade.glsl
+custom-shader = cursor_shaders/cursor_smear_smooth.glsl
+# custom-shader = cursor_shaders/cursor_blaze.glsl
 
 shell-integration = zsh
 
@@ -19,7 +21,7 @@ font-family = "D2Coding"
 cursor-opacity = 1
 cursor-color = #d3cdc3
 
-font-size = 13
+font-size = 12
 
 macos-option-as-alt = true
 
