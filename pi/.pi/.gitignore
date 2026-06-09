@@ -6,3 +6,4 @@ agent/handoffs/
 .env
 .env.*
 agent/extensions/mcporter/mcporter-cache.json
+trust.json

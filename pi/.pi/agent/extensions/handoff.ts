@@ -1,13 +1,30 @@
 import { complete, type Message } from "@mariozechner/pi-ai";
-import { BorderedLoader, convertToLlm, serializeConversation, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { BorderedLoader, convertToLlm, DynamicBorder, serializeConversation, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { Input, Key, SelectList, fuzzyFilter, matchesKey, truncateToWidth, type Component, type Focusable, type SelectItem } from "@mariozechner/pi-tui";
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
-import { access, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { registerSuccessMessageRenderer } from "./shared/success-message-renderer.js";
 
 const MAX_GIT_OUTPUT_CHARS = 16_000;
+const HANDOFF_MANAGER_MAX_VISIBLE = 24;
+
+type HandoffFile = {
+  path: string;
+  project: string;
+  fileName: string;
+  title: string;
+  mtimeMs: number;
+  size: number;
+  isCurrentProject: boolean;
+};
+
+type HandoffManagerSelection = {
+  action: "insert" | "delete";
+  file: HandoffFile;
+};
 
 const SYSTEM_PROMPT = `You create a handoff markdown file for code review or for another coding agent to continue the work.
 
@@ -184,6 +201,113 @@ function projectSlug(root: string | undefined, cwd: string): string {
   return slugifyFilename(basename(root || cwd) || "project");
 }
 
+function handoffsRootDir(): string {
+  return join(agentDir(), "handoffs");
+}
+
+function fallbackTitleFromFilename(fileName: string): string {
+  const stem = fileName.replace(/\.md$/i, "");
+  const withoutTimestamp = stem.replace(/^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}-/, "");
+  return withoutTimestamp.replace(/-/g, " ").trim() || stem || "handoff";
+}
+
+function formatDisplayDate(ms: number): string {
+  if (!Number.isFinite(ms)) return "unknown";
+  const date = new Date(ms);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function readHandoffTitle(filePath: string, fallback: string): Promise<string> {
+  try {
+    const markdown = await readFile(filePath, "utf8");
+    return titleFromMarkdown(markdown, fallback);
+  } catch {
+    return fallback;
+  }
+}
+
+async function loadHandoffFile(project: string, filePath: string, fileName: string, currentProject: string): Promise<HandoffFile | undefined> {
+  try {
+    const info = await stat(filePath);
+    if (!info.isFile()) return undefined;
+
+    const fallback = fallbackTitleFromFilename(fileName);
+    const title = await readHandoffTitle(filePath, fallback);
+    return {
+      path: filePath,
+      project,
+      fileName,
+      title,
+      mtimeMs: info.mtimeMs,
+      size: info.size,
+      isCurrentProject: project === currentProject,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+async function listHandoffFiles(currentProject: string): Promise<HandoffFile[]> {
+  const root = handoffsRootDir();
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch (error: any) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  }
+
+  const files: HandoffFile[] = [];
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      const project = entry.name;
+      const projectDir = join(root, project);
+      let projectEntries;
+      try {
+        projectEntries = await readdir(projectDir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+
+      for (const projectEntry of projectEntries) {
+        if (!projectEntry.isFile() || !projectEntry.name.toLowerCase().endsWith(".md")) continue;
+        const handoff = await loadHandoffFile(project, join(projectDir, projectEntry.name), projectEntry.name, currentProject);
+        if (handoff) files.push(handoff);
+      }
+      continue;
+    }
+
+    if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".md")) continue;
+    const handoff = await loadHandoffFile("handoffs", join(root, entry.name), entry.name, currentProject);
+    if (handoff) files.push(handoff);
+  }
+
+  return files.sort((a, b) => {
+    if (a.isCurrentProject !== b.isCurrentProject) return a.isCurrentProject ? -1 : 1;
+    const timeDiff = b.mtimeMs - a.mtimeMs;
+    if (timeDiff !== 0) return timeDiff;
+    return `${a.project}/${a.fileName}`.localeCompare(`${b.project}/${b.fileName}`);
+  });
+}
+
+function handoffToSelectItem(file: HandoffFile): SelectItem {
+  return {
+    value: file.path,
+    label: `${formatDisplayDate(file.mtimeMs)}  ${file.title}`,
+  };
+}
+
+function filterHandoffItems(items: SelectItem[], query: string): SelectItem[] {
+  const trimmed = query.trim();
+  if (!trimmed) return items;
+  return fuzzyFilter(items, trimmed, (item) => `${item.label} ${item.description ?? ""} ${item.value}`);
+}
+
 async function uniqueHandoffPath(directory: string, filename: string): Promise<string> {
   const extension = ".md";
   const stem = filename.endsWith(extension) ? filename.slice(0, -extension.length) : filename;
@@ -211,6 +335,185 @@ function extractAssistantText(response: any): string {
 
 function externalEditorCommand(): string | undefined {
   return process.env.VISUAL?.trim() || process.env.EDITOR?.trim() || undefined;
+}
+
+async function showHandoffManager(ctx: any, files: HandoffFile[], currentProject: string, initialQuery = ""): Promise<HandoffManagerSelection | undefined> {
+  const filesByPath = new Map(files.map((file) => [file.path, file]));
+  const currentProjectCount = files.filter((file) => file.isCurrentProject).length;
+
+  return ctx.ui.custom<HandoffManagerSelection | undefined>((tui: any, theme: any, _keybindings: any, done: (value: HandoffManagerSelection | undefined) => void) => {
+    const rows = tui.terminal.rows || 24;
+    const maxVisible = Math.min(HANDOFF_MANAGER_MAX_VISIBLE, Math.max(5, rows - 10));
+    const borderTop = new DynamicBorder((s: string) => theme.fg("accent", s));
+    const borderBottom = new DynamicBorder((s: string) => theme.fg("accent", s));
+    const searchInput = new Input();
+    if (initialQuery) searchInput.setValue(initialQuery);
+
+    const allItems = files.map(handoffToSelectItem);
+    const selectTheme = {
+      selectedPrefix: (text: string) => theme.fg("accent", text),
+      selectedText: (text: string) => theme.fg("accent", text),
+      description: (text: string) => theme.fg("muted", text),
+      scrollInfo: (text: string) => theme.fg("dim", text),
+      noMatch: (_text: string) => theme.fg("warning", "  No matching handoffs"),
+    };
+
+    const createSelectList = (items: SelectItem[]) => {
+      const list = new SelectList(items, maxVisible, selectTheme);
+      list.onSelect = (item) => finish("insert", item.value);
+      list.onCancel = () => done(undefined);
+      return list;
+    };
+
+    let filteredItems = filterHandoffItems(allItems, searchInput.getValue());
+    let selectList = createSelectList(filteredItems);
+    let lastQuery = searchInput.getValue();
+    let focused = false;
+
+    const finish = (action: "insert" | "delete", selectedPath?: string) => {
+      const path = selectedPath ?? selectList.getSelectedItem()?.value;
+      const file = path ? filesByPath.get(path) : undefined;
+      if (!file) return;
+      done({ action, file });
+    };
+
+    const applyFilter = (query: string) => {
+      filteredItems = filterHandoffItems(allItems, query);
+      selectList = createSelectList(filteredItems);
+    };
+
+    const component: Component & Focusable = {
+      get focused(): boolean {
+        return focused;
+      },
+      set focused(value: boolean) {
+        focused = value;
+        searchInput.focused = value;
+      },
+
+      render(width: number): string[] {
+        const innerWidth = Math.max(1, width - 2);
+        const query = searchInput.getValue();
+        const matchInfo = query
+          ? theme.fg("dim", ` ${filteredItems.length}/${files.length}`)
+          : theme.fg("dim", ` ${files.length} handoff${files.length === 1 ? "" : "s"}`);
+        const separator = theme.fg("dim", ` ${"─".repeat(Math.max(1, innerWidth))}`);
+
+        const lines: string[] = [];
+        lines.push(...borderTop.render(width));
+        lines.push(truncateToWidth(` ${theme.fg("accent", theme.bold("Handoff Manager"))}${matchInfo}`, width));
+        lines.push(truncateToWidth(` ${theme.fg("muted", "current project")} ${theme.fg("accent", currentProject)}${theme.fg("dim", ` (${currentProjectCount})`)}`, width));
+        lines.push("");
+        for (const line of searchInput.render(innerWidth)) {
+          lines.push(truncateToWidth(` ${line}`, width));
+        }
+        lines.push(truncateToWidth(separator, width));
+        lines.push(...selectList.render(width));
+        lines.push("");
+        lines.push(truncateToWidth(` ${theme.fg("dim", "↑↓")} ${theme.fg("muted", "navigate")}  ${theme.fg("dim", "enter")} ${theme.fg("muted", "insert @path")}  ${theme.fg("dim", "ctrl+d")} ${theme.fg("muted", "delete")}  ${theme.fg("dim", "esc")} ${theme.fg("muted", "cancel")}`, width));
+        lines.push(...borderBottom.render(width));
+        return lines;
+      },
+
+      invalidate(): void {
+        borderTop.invalidate();
+        borderBottom.invalidate();
+        searchInput.invalidate();
+        selectList.invalidate();
+      },
+
+      handleInput(data: string): void {
+        if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
+          done(undefined);
+          return;
+        }
+
+        if (matchesKey(data, Key.enter)) {
+          finish("insert");
+          return;
+        }
+
+        if (matchesKey(data, Key.ctrl("d"))) {
+          finish("delete");
+          return;
+        }
+
+        if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
+          selectList.handleInput(data);
+          tui.requestRender();
+          return;
+        }
+
+        searchInput.handleInput(data);
+        const nextQuery = searchInput.getValue();
+        if (nextQuery !== lastQuery) {
+          applyFilter(nextQuery);
+          lastQuery = nextQuery;
+        }
+        tui.requestRender();
+      },
+    };
+
+    return component;
+  }, {
+    overlay: true,
+    overlayOptions: {
+      anchor: "center",
+      width: "90%",
+      minWidth: 48,
+      maxHeight: "85%",
+      margin: 2,
+    },
+  });
+}
+
+async function manageHandoffs(pi: ExtensionAPI, ctx: any, initialQuery = ""): Promise<void> {
+  if (!ctx.hasUI) {
+    ctx.ui.notify("/handoffs requires interactive or RPC UI", "error");
+    return;
+  }
+
+  await ctx.waitForIdle();
+
+  const root = await gitRoot(pi, ctx.cwd);
+  const currentProject = projectSlug(root, ctx.cwd);
+
+  while (true) {
+    let files: HandoffFile[];
+    try {
+      files = await listHandoffFiles(currentProject);
+    } catch (error) {
+      ctx.ui.notify(`Failed to list handoffs: ${errorText(error)}`, "error");
+      return;
+    }
+
+    if (files.length === 0) {
+      ctx.ui.notify("No saved handoffs. Generate one with /handoff <goal>.", "warning");
+      return;
+    }
+
+    const selection = await showHandoffManager(ctx, files, currentProject, initialQuery);
+    if (!selection) {
+      ctx.ui.notify("Cancelled", "info");
+      return;
+    }
+
+    if (selection.action === "insert") {
+      ctx.ui.pasteToEditor(`@${selection.file.path} `);
+      ctx.ui.notify(`Inserted handoff: ${selection.file.fileName}`, "info");
+      return;
+    }
+
+    const confirmed = await ctx.ui.confirm("Delete handoff?", `${selection.file.title}\n${selection.file.path}`);
+    if (!confirmed) continue;
+
+    try {
+      await unlink(selection.file.path);
+      ctx.ui.notify(`Deleted handoff: ${selection.file.fileName}`, "info");
+    } catch (error) {
+      ctx.ui.notify(`Failed to delete handoff: ${errorText(error)}`, "error");
+    }
+  }
 }
 
 async function editInExternalEditor(ctx: any, title: string, prefill: string): Promise<string | undefined> {
@@ -278,9 +581,22 @@ async function editInExternalEditor(ctx: any, title: string, prefill: string): P
 export default function handoffExtension(pi: ExtensionAPI) {
   registerSuccessMessageRenderer(pi, "handoff");
 
-  pi.registerCommand("handoff", {
-    description: "Generate a markdown handoff file for review or continuation.",
+  pi.registerCommand("handoffs", {
+    description: "Manage saved handoff files: insert @references or delete old handoffs.",
     handler: async (args, ctx) => {
+      await manageHandoffs(pi, ctx, (args ?? "").trim());
+    },
+  });
+
+  pi.registerCommand("handoff", {
+    description: "Generate a markdown handoff file for review or continuation; run without args to manage saved handoffs.",
+    handler: async (args, ctx) => {
+      const goal = (args ?? "").trim();
+      if (!goal) {
+        await manageHandoffs(pi, ctx);
+        return;
+      }
+
       if (!ctx.hasUI) {
         ctx.ui.notify("/handoff requires interactive or RPC UI", "error");
         return;
@@ -288,12 +604,6 @@ export default function handoffExtension(pi: ExtensionAPI) {
 
       if (!ctx.model) {
         ctx.ui.notify("No model selected", "error");
-        return;
-      }
-
-      const goal = (args ?? "").trim();
-      if (!goal) {
-        ctx.ui.notify("Usage: /handoff <goal for review or next agent>", "error");
         return;
       }
 

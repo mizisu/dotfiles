@@ -818,19 +818,6 @@ export default function commitExtension(pi: ExtensionAPI) {
           return;
         }
 
-        const stagedAlready = await hasStagedChanges(pi, root);
-        if (stagedAlready) {
-          const ok = await ctx.ui.confirm(
-            "Reset staged changes?",
-            "/commit creates its own staging groups from the full working tree. Existing staged changes will be unstaged first; file contents are not discarded.",
-          );
-          if (!ok) {
-            setStatus(undefined);
-            ctx.ui.notify("Cancelled", "info");
-            return;
-          }
-        }
-
         const untrackedPreviews = await readUntrackedPreviews(root, untrackedFiles);
         const diffByPath = new Map(diffFiles.map((file) => [file.path, file]));
         const sessionContext = buildSessionContext(ctx);

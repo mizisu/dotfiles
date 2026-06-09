@@ -13,3 +13,4 @@
   - If a tool result says a file was formatted, read it before further exact-text edits.
 - When using Mermaid diagrams, keep node/edge labels in English and terminal-friendly.
   Use a single ` ```mermaid ` code fence directly; do not wrap it inside another markdown/code fence.
+- Use gh CLI when you need access Github
