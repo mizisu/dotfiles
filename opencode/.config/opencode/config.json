@@ -24,7 +24,7 @@
 	},
 	"agent": {
 		"code-analyzer": {
-			"disable": true
+			"disable": false 
 		},
 		"general": {
 			"disable": true
