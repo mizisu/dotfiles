@@ -1,4 +1,7 @@
-typeset -g POWERLEVEL9K_DISABLE_GITSTATUS=true
+# Keep `zsh -i -c ...` quiet; real interactive terminals still use p10k gitstatus.
+if [[ -n ${ZSH_EXECUTION_STRING:-} ]]; then
+  typeset -g POWERLEVEL9K_DISABLE_GITSTATUS=true
+fi
 
 # Enable Powerlevel10k instant prompt. Should stay close to the top of ~/.zshrc.
 # Initialization code that may require console input (password prompts, [y/n]
@@ -122,7 +125,10 @@ source $ZSH/oh-my-zsh.sh
 eval "$(zoxide init zsh)"
 
 # fzf
-source <(fzf --zsh)
+if [[ -z ${ZSH_EXECUTION_STRING:-} ]]; then
+  [[ -r /opt/homebrew/opt/fzf/shell/completion.zsh ]] && source /opt/homebrew/opt/fzf/shell/completion.zsh
+  [[ -r /opt/homebrew/opt/fzf/shell/key-bindings.zsh ]] && source /opt/homebrew/opt/fzf/shell/key-bindings.zsh
+fi
 
 # Add path 
 export PATH="/Users/charles/.local/bin:$PATH"
@@ -190,19 +196,57 @@ function uuid() { python3 -c "import uuid; arg_uuid='$1';" }
 source ~/.orbstack/shell/init.zsh 2>/dev/null || :
 
 # Go version manager
-[[ -s "/Users/charles/.gvm/scripts/gvm" ]] && source "/Users/charles/.gvm/scripts/gvm"
+gvm() {
+  unset -f gvm
+  if [[ -s "$HOME/.gvm/scripts/gvm" ]]; then
+    source "$HOME/.gvm/scripts/gvm"
+    gvm "$@"
+  else
+    print -u2 "gvm: $HOME/.gvm/scripts/gvm not found"
+    return 127
+  fi
+}
 
 # Run Sublime Text in terminal
 export PATH="/Applications/Sublime Text.app/Contents/SharedSupport/bin:$PATH"
 
-if command -v wt >/dev/null 2>&1; then eval "$(command wt config shell init zsh)"; fi
+if [[ -z ${ZSH_EXECUTION_STRING:-} ]]; then
+  _wt_init_cache="${XDG_CACHE_HOME:-$HOME/.cache}/wt-shell-init.zsh"
+  _wt_bin="${WORKTRUNK_BIN:-$(command -v wt 2>/dev/null)}"
+  if [[ -n $_wt_bin ]]; then
+    if [[ ! -r $_wt_init_cache || $_wt_init_cache -ot $_wt_bin ]]; then
+      mkdir -p "${_wt_init_cache:h}"
+      command "$_wt_bin" config shell init zsh >| "$_wt_init_cache" 2>/dev/null
+    fi
+    [[ -r $_wt_init_cache ]] && source "$_wt_init_cache"
+  fi
+  unset _wt_init_cache _wt_bin
+fi
 
 # Node Version Manager
 export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
-[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+# Keep the default Node version available without sourcing nvm on every shell startup.
+typeset -U path
+if [[ -r "$NVM_DIR/alias/default" ]]; then
+  _nvm_default_version="$(<"$NVM_DIR/alias/default")"
+  [[ $_nvm_default_version == v* ]] || _nvm_default_version="v$_nvm_default_version"
+  _nvm_default_dirs=("$NVM_DIR/versions/node"/${_nvm_default_version}*(/N))
+  if (( ${#_nvm_default_dirs} )); then
+    path=("${_nvm_default_dirs[-1]}/bin" "${path[@]}")
+    export NVM_BIN="${_nvm_default_dirs[-1]}/bin"
+  fi
+  unset _nvm_default_version _nvm_default_dirs
+fi
+nvm() {
+  unset -f nvm
+  [[ -s "$NVM_DIR/nvm.sh" ]] && source "$NVM_DIR/nvm.sh" --no-use
+  [[ -s "$NVM_DIR/bash_completion" ]] && source "$NVM_DIR/bash_completion"
+  nvm "$@"
+}
 
 # Powerlevel10k theme
-source /opt/homebrew/share/powerlevel10k/powerlevel10k.zsh-theme
-# To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
-[[ -f ~/.p10k.zsh ]] && source ~/.p10k.zsh
+if [[ -z ${ZSH_EXECUTION_STRING:-} ]]; then
+  source /opt/homebrew/share/powerlevel10k/powerlevel10k.zsh-theme
+  # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
+  [[ -f ~/.p10k.zsh ]] && source ~/.p10k.zsh
+fi
