@@ -282,9 +282,14 @@ function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
       render(width: number): string[] {
         const lines: string[] = [];
         const sessionName = ctx.sessionManager.getSessionName();
+        const goalStatus = footerData.getExtensionStatuses?.().get("goal");
+        const sessionLineParts = [
+          sessionName ? theme.fg("dim", `Session: ${sessionName}`) : "",
+          goalStatus ? theme.fg("accent", goalStatus) : "",
+        ].filter(Boolean);
 
-        if (sessionName) {
-          lines.push(theme.fg("dim", paddedLine(`Session: ${sessionName}`, width)));
+        if (sessionLineParts.length > 0) {
+          lines.push(paddedLine(sessionLineParts.join(theme.fg("dim", "  •  ")), width));
         }
 
         const branch = footerData.getGitBranch();
