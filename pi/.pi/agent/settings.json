@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "0.79.0",
+  "lastChangelogVersion": "0.79.9",
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.5",
   "mediumProvider": "openai-codex",
@@ -22,7 +22,8 @@
   "showHardwareCursor": true,
   "doubleEscapeAction": "tree",
   "packages": [
-    "https://github.com/davebcn87/pi-autoresearch"
+    "https://github.com/davebcn87/pi-autoresearch",
+    "git:github.com/DietrichGebert/ponytail"
   ],
   "compaction": {
     "enabled": true
