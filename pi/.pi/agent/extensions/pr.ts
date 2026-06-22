@@ -15,6 +15,11 @@ const MAX_TITLE_CHARS = 72;
 const MAX_CORE_DIFF_FILES = 10;
 const MAX_UNTRACKED_FILE_CHARS = 24_000;
 const MAX_UNTRACKED_TOTAL_CHARS = 70_000;
+const STYLE_PR_FETCH_LIMIT = 100;
+const STYLE_TITLE_RENDER_LIMIT = 80;
+const STYLE_BODY_RENDER_LIMIT = 18;
+const MAX_STYLE_BODY_CHARS = 1_200;
+const MAX_STYLE_TOTAL_CHARS = 28_000;
 
 const SENSITIVE_EXCLUDE_PATHS = [
   ":(exclude).env",
@@ -50,7 +55,8 @@ Return ONLY valid JSON, no markdown fences:
 Default style:
 - 간결한 한국어.
 - Write for a teammate who has not followed the implementation background, unless the directives say this is a stacked/existing PR.
-- Prefer reviewer context over code archaeology: explain why this PR exists and what behavior changes, not every file/function.
+- Prefer reviewer context over code archaeology, but keep enough implementation context for review when the repository/author style does so.
+- When author PR style references are provided, match their Korean tone, title shape, section density, and implementation detail level. Use them for style only; never copy their facts, links, screenshots, issue IDs, file names, or claims unless independently present in the current git data.
 
 Grounding rules:
 - Use ONLY the provided git data, PR template, branch/base metadata, and explicit generation directives.
@@ -63,16 +69,16 @@ Title rules:
 - The title is only a suggestion; the user may confirm or override it.
 - Title: concise, specific, <= 72 characters including issue key. Do not end with a period.
 - If an issue key prefix is provided, start the title with that exact prefix.
-- Product-facing changes: express user/product behavior, not implementation means. Avoid titles like "flag 추가", "hook 추가", "middleware 수정" when the visible behavior can be named.
-- Technical-only changes: technical terms are allowed.
-- Do not use Conventional Commit prefixes unless the changes are clearly tooling/chore-only.
+- Product-facing changes: express user/product behavior when that is clearer, but implementation nouns are allowed when they match the author's existing PR titles.
+- Technical/internal changes: API, service, workflow, model, hook, or config terms are allowed and often preferred.
+- Do not force Conventional Commit prefixes. Use them only when the current branch/commits or author examples clearly fit.
 
 Body/template rules:
 - Preserve the provided PR template's heading order, checklists, HTML comments, and placeholders unless a section is explicitly optional and irrelevant.
 - Follow each template section's HTML comment guide; the template is the source of truth for section intent.
 - 배경/Why: explain only what need/problem would remain without this PR. Do not describe implementation details, options, or policy mechanics here.
-- 변경 내용/What/Summary: summarize changed behavior/capability. Use 1-5 concise bullets when the template allows bullets.
-- Do not list code changes that are obvious from diff, such as raw file/function/class lists. Use file names only when they clarify purpose/location of a new artifact.
+- 변경 내용/What/Summary: summarize changed behavior/capability. Use concise bullets; broad PRs may need more than 5.
+- Do not mechanically list every changed file/function. API, service, component, model, workflow, or test names may be mentioned when they clarify review scope or match author style.
 - For new files, describe purpose and location. For modified files, describe the changed behavior only.
 - Optional sections whose comment says "삭제해도 됩니다", "if applicable", or similar should be removed when there is no grounded content. Do not leave empty optional sections.
 - If a section is retained, keep its HTML comment unless it would make the final body confusing.
@@ -102,6 +108,12 @@ interface ExistingPr {
   base: string;
   url: string;
   isDraft?: boolean;
+}
+
+interface MergedPrStyleExample {
+  number: number;
+  title: string;
+  body: string;
 }
 
 interface BaseChoice {
@@ -509,6 +521,101 @@ async function existingPrForBranch(pi: ExtensionAPI, root: string, branch: strin
   }
 }
 
+async function currentGhLogin(pi: ExtensionAPI, root: string): Promise<string | undefined> {
+  const result = await pi.exec("gh", ["api", "user", "--jq", ".login"], { cwd: root, timeout: 10_000 });
+  if (result.code !== 0) return undefined;
+  return result.stdout.trim() || undefined;
+}
+
+async function collectMergedPrStyleExamples(pi: ExtensionAPI, root: string): Promise<MergedPrStyleExample[]> {
+  const login = await currentGhLogin(pi, root);
+  if (!login) return [];
+
+  const result = await pi.exec("gh", [
+    "pr",
+    "list",
+    "--state",
+    "merged",
+    "--author",
+    login,
+    "--limit",
+    String(STYLE_PR_FETCH_LIMIT),
+    "--json",
+    "number,title,body",
+  ], { cwd: root, timeout: 45_000 });
+  if (result.code !== 0) return [];
+
+  try {
+    const items = JSON.parse(result.stdout) as any[];
+    return items
+      .map((item) => ({
+        number: Number(item?.number),
+        title: String(item?.title ?? "").trim(),
+        body: String(item?.body ?? "").trim(),
+      }))
+      .filter((item): item is MergedPrStyleExample => Number.isFinite(item.number) && !!item.title);
+  } catch {
+    return [];
+  }
+}
+
+function redactStyleUrl(url: string): string {
+  if (url.includes("github.com/user-attachments")) return "[screenshot]";
+  if (url.includes("teamlemonbase.slack.com")) return "[Slack link]";
+  if (url.includes("notion.so") || url.includes("app.notion.com")) return "[Notion link]";
+  if (url.includes("lemonbase.atlassian.net")) return "[Jira link]";
+  if (url.includes("figma.com")) return "[Figma link]";
+  return "[link]";
+}
+
+function sanitizeStyleBody(body: string): string {
+  const normalized = body.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const withoutComments = normalized.replace(/<!--[\s\S]*?-->/g, "");
+  const withoutImages = withoutComments
+    .replace(/<img\b[^>]*>/gi, "[screenshot]")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "[screenshot]");
+  return truncateText(
+    withoutImages
+      .replace(/https?:\/\/[^\s)>"']+/g, (url) => redactStyleUrl(url))
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim(),
+    MAX_STYLE_BODY_CHARS,
+    "[style body truncated]",
+  );
+}
+
+function buildAuthorStyleReference(examples: MergedPrStyleExample[]): string | undefined {
+  if (examples.length === 0) return undefined;
+
+  const titleLines = examples
+    .slice(0, STYLE_TITLE_RENDER_LIMIT)
+    .map((example) => `- #${example.number} ${example.title}`);
+  const bodyBlocks = examples
+    .map((example) => ({ ...example, body: sanitizeStyleBody(example.body) }))
+    .filter((example) => example.body)
+    .slice(0, STYLE_BODY_RENDER_LIMIT)
+    .map((example) => [`### #${example.number} ${example.title}`, example.body].join("\n"));
+
+  const reference = [
+    `Latest ${examples.length} merged PRs by the current GitHub user were checked for author style.`,
+    "Use these conclusions before reading individual examples:",
+    "- Titles are usually short Korean noun phrases ending with 구현/변경/수정/추가/제거/적용/최적화. Conventional Commit prefixes appear sometimes, but are not forced.",
+    "- Bodies are concise and implementation-aware: 배경 explains the concrete problem/context; 변경 내용 may mention APIs, services, components, models, workflows, and tests when useful for review.",
+    "- Tone is natural Korean engineering prose: 하였습니다/했습니다/변경하였습니다/구현하였습니다. Avoid overly polished marketing copy.",
+    "- 리뷰 포인트 is short and practical when there is a grounded check, such as 기존 동작과 동일한지, 스타일가이드에 맞는지, or a known risk. Omit it when there is no grounded content.",
+    "- Small PRs can be very short. Do not expand obvious changes just to fill every section.",
+    "",
+    "## Recent merged PR titles",
+    titleLines.join("\n"),
+    bodyBlocks.length > 0 ? "" : undefined,
+    bodyBlocks.length > 0 ? "## Sanitized body examples" : undefined,
+    bodyBlocks.join("\n\n"),
+  ].filter((part): part is string => typeof part === "string" && part.length > 0).join("\n");
+
+  return truncateText(reference, MAX_STYLE_TOTAL_CHARS, "[author style reference truncated]");
+}
+
 async function chooseBaseBranch(
   pi: ExtensionAPI,
   root: string,
@@ -519,68 +626,35 @@ async function chooseBaseBranch(
   existing?: ExistingPr,
 ): Promise<BaseChoice | undefined> {
   const stackedCandidates = await detectStackedBaseCandidates(pi, root, current, fallbackDefaultBranch);
-  const recommendedBase = stackedCandidates[0];
+  const recommendedBase = stackedCandidates[0] ?? fallbackDefaultBranch;
 
   if (existing) {
     if (parsed.base && parsed.base !== existing.base) {
       ctx.ui.notify(`Existing PR base(${existing.base})를 사용합니다. 입력한 base(${parsed.base})는 무시됩니다.`, "warning");
     }
-    return { base: existing.base, reason: "existing-pr", recommendedBase };
+    return { base: existing.base, reason: "existing-pr", recommendedBase: stackedCandidates[0] };
   }
 
-  if (parsed.base) return { base: parsed.base, reason: "argument", recommendedBase };
+  if (parsed.base) return { base: parsed.base, reason: "argument", recommendedBase: stackedCandidates[0] };
 
-  const labels = recommendedBase
-    ? [
-        ...stackedCandidates.map((branch, index) => index === 0 ? `${branch} (Recommended stacked base)` : `${branch} (stacked base)`),
-        `${fallbackDefaultBranch} (default branch)`,
-        "Choose another branch…",
-        "Cancel",
-      ]
-    : [
-        `${fallbackDefaultBranch} (Recommended default branch)`,
-        "Choose another branch…",
-        "Cancel",
-      ];
-  const title = recommendedBase
-    ? "Recommended base branch detected. Choose the PR base branch."
-    : "Choose the PR base branch.";
-  const choice = await ctx.ui.select(title, labels);
-  if (!choice || choice === "Cancel") return undefined;
-  if (choice === "Choose another branch…") {
-    const picked = await openBaseBranchPicker(pi, root, ctx, recommendedBase ?? fallbackDefaultBranch);
-    return picked ? { base: picked, reason: "picker", recommendedBase } : undefined;
-  }
+  const picked = await openBaseBranchPicker(pi, root, ctx, recommendedBase);
+  if (!picked) return undefined;
 
-  const branch = choice.replace(/ \(.+\)$/, "");
-  const reason: BaseSelectionReason = branch === fallbackDefaultBranch
-    ? "default"
-    : stackedCandidates.includes(branch)
-      ? "stacked-prompt"
+  const reason: BaseSelectionReason = picked === (stackedCandidates[0] ?? "")
+    ? "stacked-prompt"
+    : picked === fallbackDefaultBranch && !stackedCandidates[0]
+      ? "default"
       : "picker";
-  return { base: branch, reason, recommendedBase };
+
+  return { base: picked, reason, recommendedBase: stackedCandidates[0] };
 }
 
-async function confirmBaseOverride(ctx: any, choice: BaseChoice): Promise<BaseChoice | undefined> {
+async function confirmBaseOverride(_ctx: any, choice: BaseChoice): Promise<BaseChoice | undefined> {
   const recommended = choice.recommendedBase;
   if (!recommended || choice.base === recommended || choice.reason === "existing-pr") return choice;
 
   const warning = `\`${choice.base}\` 기준 PR에는 \`${recommended}\`에 이미 포함된 상위 변경까지 함께 들어갑니다.`;
-  if (choice.reason === "argument") return { ...choice, overrideWarning: warning };
-
-  const action = await ctx.ui.select(`${warning}\n\n추천 base와 다른 base를 선택했습니다.`, [
-    `Use ${recommended} instead (Recommended)`,
-    `Continue with ${choice.base}`,
-    "Cancel",
-  ]);
-
-  if (action === `Use ${recommended} instead (Recommended)`) {
-    return { ...choice, base: recommended, reason: "stacked-prompt", overrideWarning: undefined };
-  }
-  if (action === `Continue with ${choice.base}`) {
-    return { ...choice, overrideWarning: warning };
-  }
-  return undefined;
+  return { ...choice, overrideWarning: warning };
 }
 
 async function findPrTemplate(root: string): Promise<string | undefined> {
@@ -882,6 +956,7 @@ function buildModelInput(params: {
   baseChoice: BaseChoice;
   existing?: ExistingPr;
   context: ChangeContext;
+  authorStyle?: string;
 }): string {
   const issueKey = issueKeyFromBranch(params.current);
   const reviewerContext = params.baseChoice.reason === "existing-pr" || params.baseChoice.reason.startsWith("stacked")
@@ -892,6 +967,7 @@ function buildModelInput(params: {
 
   return [
     `## Generation directives\n- Draft source: ${sourceLabel}\n- Change nature hint: ${changeNature}\n- Reviewer context: ${reviewerContext}\n- Final base: ${params.base}\n- Base ref used for git data: ${params.baseRef}\n- Base selection reason: ${params.baseChoice.reason}\n${params.baseChoice.recommendedBase ? `- Recommended stacked base: ${params.baseChoice.recommendedBase}` : ""}\n${params.baseChoice.overrideWarning ? `- Broad-base warning: ${params.baseChoice.overrideWarning}` : ""}\n${issueKey ? `- Issue key prefix: [${issueKey}]` : ""}\n${params.existing ? `- Existing PR: #${params.existing.number} ${params.existing.url}` : ""}`,
+    params.authorStyle ? `## Author PR style reference (style only; do not copy facts)\n${params.authorStyle}` : "",
     `## PR Template\n${params.template}`,
     `## Branch\n${params.current} → ${params.base}`,
     params.context.source === "working-tree"
@@ -1161,8 +1237,8 @@ async function updatePr(pi: ExtensionAPI, root: string, pr: ExistingPr, content:
   return result.stdout.trim() || pr.url;
 }
 
-function tableEscape(value: string): string {
-  return value.replace(/\|/g, "\\|").replace(/\n/g, "<br>");
+function bulletValue(value: string): string {
+  return value.replace(/\n/g, "\n  ");
 }
 
 function fileSummary(context: ChangeContext): string {
@@ -1197,11 +1273,7 @@ function buildFinalSummary(params: {
   ];
   if (params.warning) rows.push(["Warning", params.warning]);
 
-  return [
-    "| 항목 | 값 |",
-    "|---|---|",
-    ...rows.map(([key, value]) => `| ${tableEscape(key)} | ${tableEscape(value)} |`),
-  ].join("\n");
+  return rows.map(([key, value]) => `- ${key}: ${bulletValue(value)}`).join("\n");
 }
 
 function buildResultMessage(summary: string, content: GeneratedPr, includeBody: boolean): string {
@@ -1227,8 +1299,8 @@ export default function prExtension(pi: ExtensionAPI) {
       }
 
       const working = createCommandWorking(ctx, "pr", "PR");
-      const setStatus = (text: string | undefined, details: string[] = []) => {
-        working.set(text, details);
+      const setStatus = (text: string | undefined, _details: string[] = []) => {
+        working.set(text);
       };
 
       try {
@@ -1304,6 +1376,9 @@ export default function prExtension(pi: ExtensionAPI) {
 
         setStatus("Gathering PR template…", [`${current} → ${resolvedBase.base}`]);
         const template = (await findPrTemplate(root)) ?? DEFAULT_PR_TEMPLATE;
+
+        setStatus("Gathering author PR style…", [`${current} → ${resolvedBase.base}`]);
+        const authorStyle = buildAuthorStyleReference(await collectMergedPrStyleExamples(pi, root).catch(() => []));
         const modelInput = buildModelInput({
           template,
           current,
@@ -1312,9 +1387,10 @@ export default function prExtension(pi: ExtensionAPI) {
           baseChoice: resolvedBase,
           existing,
           context,
+          authorStyle,
         });
 
-        setStatus("Generating reviewer-focused PR draft…", [source === "working-tree" ? "working tree scope" : "committed scope", "Why + What"]);
+        setStatus("Generating author-style PR draft…", [source === "working-tree" ? "working tree scope" : "committed scope", "Why + What"]);
         const generated = await generatePrDraft(ctx, modelInput);
         const suggested = { ...generated, title: withIssueKeyPrefix(generated.title, current) };
         setStatus(undefined);
