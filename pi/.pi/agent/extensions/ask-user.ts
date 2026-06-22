@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth } from "@mariozechner/pi-tui";
+import { Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 
 interface QuestionOption {
   label: string;
@@ -168,6 +168,22 @@ function countAnswered(details: QuestionResultDetails): number {
   return details.answers.filter((answers) => answers.length > 0).length;
 }
 
+function addWrapped(lines: string[], text: string, width: number, prefix = ""): void {
+  const safeWidth = Math.max(1, width);
+  const prefixWidth = visibleWidth(prefix);
+  const wrapped = wrapTextWithAnsi(text, Math.max(1, safeWidth - prefixWidth));
+
+  if (wrapped.length === 0) {
+    lines.push(truncateToWidth(prefix, safeWidth));
+    return;
+  }
+
+  const continuation = " ".repeat(prefixWidth);
+  for (let index = 0; index < wrapped.length; index++) {
+    lines.push(truncateToWidth(`${index === 0 ? prefix : continuation}${wrapped[index]}`, safeWidth));
+  }
+}
+
 export default function askUserExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "ask_user",
@@ -217,6 +233,7 @@ export default function askUserExtension(pi: ExtensionAPI) {
         let selectedIndex = 0;
         let editMode = false;
         let cachedLines: string[] | undefined;
+        let cachedWidth: number | undefined;
 
         const editorTheme: EditorTheme = {
           borderColor: (text: string) => theme.fg("accent", text),
@@ -334,6 +351,12 @@ export default function askUserExtension(pi: ExtensionAPI) {
         };
 
         const handleInput = (data: string): void => {
+          if (matchesKey(data, Key.ctrl("o"))) {
+            ctx.ui.setToolsExpanded(!ctx.ui.getToolsExpanded());
+            refresh();
+            return;
+          }
+
           if (editMode) {
             if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
               editMode = false;
@@ -408,7 +431,12 @@ export default function askUserExtension(pi: ExtensionAPI) {
           const selected = selections[tab];
           const customValue = customValues[tab].trim();
 
-          add(` ${theme.fg("text", question.question)}${question.multiple ? theme.fg("dim", " (select all that apply)") : ""}`);
+          addWrapped(
+            lines,
+            `${theme.fg("text", question.question)}${question.multiple ? theme.fg("dim", " (select all that apply)") : ""}`,
+            width,
+            " ",
+          );
           add("");
 
           for (let i = 0; i < question.options.length; i++) {
@@ -418,8 +446,8 @@ export default function askUserExtension(pi: ExtensionAPI) {
             const marker = question.multiple ? `[${picked ? "✓" : " "}] ` : picked ? "✓ " : "";
             const prefix = active ? theme.fg("accent", "> ") : "  ";
             const label = `${i + 1}. ${marker}${option.label}`;
-            add(prefix + theme.fg(active ? "accent" : picked ? "success" : "text", label));
-            if (option.description) add(`     ${theme.fg("muted", option.description)}`);
+            addWrapped(lines, theme.fg(active ? "accent" : picked ? "success" : "text", label), width, prefix);
+            if (option.description) addWrapped(lines, theme.fg("muted", option.description), width, "     ");
           }
 
           if (question.custom) {
@@ -429,8 +457,13 @@ export default function askUserExtension(pi: ExtensionAPI) {
             const marker = question.multiple ? `[${picked ? "✓" : " "}] ` : picked ? "✓ " : "";
             const suffix = editMode ? " ✎" : "";
             const prefix = active ? theme.fg("accent", "> ") : "  ";
-            add(prefix + theme.fg(active ? "accent" : picked ? "success" : "text", `${index + 1}. ${marker}Type your own answer${suffix}`));
-            if (customValue) add(`     ${theme.fg("muted", customValue)}`);
+            addWrapped(
+              lines,
+              theme.fg(active ? "accent" : picked ? "success" : "text", `${index + 1}. ${marker}Type your own answer${suffix}`),
+              width,
+              prefix,
+            );
+            if (customValue) addWrapped(lines, theme.fg("muted", customValue), width, "     ");
           }
 
           if (editMode) {
@@ -447,13 +480,13 @@ export default function askUserExtension(pi: ExtensionAPI) {
           for (let i = 0; i < questions.length; i++) {
             const answers = selectedAnswersFor(i);
             const answerText = answers.length ? answers.join(", ") : "(no answer)";
-            add(` ${theme.fg("muted", `${questions[i].header}:`)} ${theme.fg(answers.length ? "text" : "warning", answerText)}`);
-            add(`   ${theme.fg("dim", questions[i].question)}`);
+            addWrapped(lines, theme.fg(answers.length ? "text" : "warning", answerText), width, ` ${theme.fg("muted", `${questions[i].header}:`)} `);
+            addWrapped(lines, theme.fg("dim", questions[i].question), width, "   ");
           }
         };
 
         const render = (width: number): string[] => {
-          if (cachedLines) return cachedLines;
+          if (cachedLines && cachedWidth === width) return cachedLines;
 
           const lines: string[] = [];
           const add = (text = "") => lines.push(text ? truncateToWidth(text, width) : "");
@@ -474,18 +507,19 @@ export default function askUserExtension(pi: ExtensionAPI) {
 
           add("");
           if (editMode) {
-            add(` ${theme.fg("dim", "enter save • esc back")}`);
+            add(` ${theme.fg("dim", "enter save • esc back • ctrl+o details")}`);
           } else if (onReviewTab()) {
-            add(` ${theme.fg("dim", "enter submit • tab/←→ questions • esc cancel")}`);
+            add(` ${theme.fg("dim", "enter submit • tab/←→ questions • ctrl+o details • esc cancel")}`);
           } else {
             const question = currentQuestion();
             const action = question?.multiple ? "enter/space toggle" : "enter select";
             const nav = hasReviewTab ? " • tab/←→ next/review" : "";
-            add(` ${theme.fg("dim", `↑↓/j/k navigate • 1-9 choose • ${action}${nav} • esc cancel`)}`);
+            add(` ${theme.fg("dim", `↑↓/j/k navigate • 1-9 choose • ${action}${nav} • ctrl+o details • esc cancel`)}`);
           }
           add(theme.fg("accent", "─".repeat(width)));
 
           cachedLines = lines;
+          cachedWidth = width;
           return cachedLines;
         };
 
@@ -493,6 +527,7 @@ export default function askUserExtension(pi: ExtensionAPI) {
           render,
           invalidate: () => {
             cachedLines = undefined;
+            cachedWidth = undefined;
           },
           handleInput,
         };
@@ -518,7 +553,7 @@ export default function askUserExtension(pi: ExtensionAPI) {
       return new Text(text, 0, 0);
     },
 
-    renderResult(result, _options, theme) {
+    renderResult(result, options, theme) {
       const details = result.details as QuestionResultDetails | undefined;
       if (!details) {
         const first = result.content[0];
@@ -529,8 +564,29 @@ export default function askUserExtension(pi: ExtensionAPI) {
       const answered = countAnswered(details);
       const lines = [`${theme.fg("success", "✓")} ${theme.fg("accent", `${answered}/${details.questions.length} answered`)}`];
       for (let i = 0; i < details.questions.length; i++) {
+        const question = details.questions[i];
         const answers = details.answers[i];
-        lines.push(`${theme.fg("muted", `${details.questions[i].header}:`)} ${theme.fg(answers.length ? "text" : "warning", answers.length ? answers.join(", ") : "(no answer)")}`);
+        if (!options.expanded) {
+          lines.push(`${theme.fg("muted", `${question.header}:`)} ${theme.fg(answers.length ? "text" : "warning", answers.length ? answers.join(", ") : "(no answer)")}`);
+          continue;
+        }
+
+        if (i > 0) lines.push("");
+        lines.push(`  ${theme.fg("dim", question.question)}`);
+        for (let j = 0; j < question.options.length; j++) {
+          const option = question.options[j];
+          const picked = answers.includes(option.label);
+          const marker = question.multiple ? `[${picked ? "✓" : " "}] ` : picked ? "✓ " : "";
+          lines.push(`    ${j + 1}. ${theme.fg(picked ? "success" : "text", `${marker}${option.label}`)}`);
+          if (option.description) lines.push(`       ${theme.fg("muted", option.description)}`);
+        }
+        if (question.custom) {
+          const custom = details.customAnswers[i] ?? "";
+          const picked = custom.length > 0;
+          const marker = question.multiple ? `[${picked ? "✓" : " "}] ` : picked ? "✓ " : "";
+          lines.push(`    ${question.options.length + 1}. ${theme.fg(picked ? "success" : "text", `${marker}Type your own answer`)}`);
+          if (custom) lines.push(`       ${theme.fg("muted", custom)}`);
+        }
       }
       return new Text(lines.join("\n"), 0, 0);
     },
