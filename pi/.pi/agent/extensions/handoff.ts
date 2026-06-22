@@ -4,7 +4,7 @@ import { Input, Key, SelectList, fuzzyFilter, matchesKey, truncateToWidth, type 
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access, mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { registerSuccessMessageRenderer } from "./shared/success-message-renderer.js";
 
@@ -26,15 +26,24 @@ type HandoffManagerSelection = {
   file: HandoffFile;
 };
 
-const SYSTEM_PROMPT = `You create a handoff markdown file for code review or for another coding agent to continue the work.
+const SYSTEM_PROMPT = `You compact the current conversation into a handoff markdown document for a fresh coding agent to continue the work.
 
 Rules:
 - Start with exactly one concise top-level title: # Handoff: <short topic>
 - Use the same language as the user when practical.
-- Use only the provided conversation history and git summary as sources.
-- Do not invent tests, verification, requirements, files, or decisions.
-- If verification is unclear, explicitly say it is not confirmed.
+- Treat the provided Handoff Goal as the next session's focus; tailor details and next steps to that focus.
+- Use only the provided conversation history, git summary, session metadata, and available-skill list as sources.
+- Do not invent tests, verification, requirements, files, decisions, or skills.
+- Redact sensitive information, including API keys, passwords, tokens, private keys, auth headers, cookies, and unnecessary personal data.
+- Do not duplicate content already captured in artifacts such as PRDs, plans, ADRs, issues, commits, or diffs; reference them by path or URL and summarize only the missing context.
+- If verification is unclear or not run, explicitly say it is not confirmed.
 - Be concise, but make the result self-contained enough for a reviewer or next agent.
+
+Suggested skills:
+- Include a "Suggested Skills" section.
+- Suggest only skills listed under Available Skills and only when they materially help the next session.
+- For each suggested skill, include a one-line reason.
+- If no listed skill is relevant, write "- None identified."
 
 Recommended structure:
 # Handoff: <short topic>
@@ -45,11 +54,13 @@ Recommended structure:
 
 ## Git State
 
-## Important Files
+## Important Files / Artifacts
 
 ## Decisions / Constraints
 
 ## Verification
+
+## Suggested Skills
 
 ## Review Focus / Next Steps
 
@@ -193,16 +204,12 @@ function slugifyFilename(value: string): string {
     || "handoff";
 }
 
-function agentDir(): string {
-  return process.env.PI_CODING_AGENT_DIR?.trim() || join(homedir(), ".pi", "agent");
-}
-
 function projectSlug(root: string | undefined, cwd: string): string {
   return slugifyFilename(basename(root || cwd) || "project");
 }
 
 function handoffsRootDir(): string {
-  return join(agentDir(), "handoffs");
+  return join(tmpdir(), "pi-handoffs");
 }
 
 function fallbackTitleFromFilename(fileName: string): string {
@@ -331,6 +338,29 @@ function extractAssistantText(response: any): string {
     .map((part: { text: string }) => part.text)
     .join("\n")
     .trim();
+}
+
+function formatAvailableSkills(ctx: any): string {
+  let skills: any[] | undefined;
+  try {
+    const options = typeof ctx.getSystemPromptOptions === "function" ? ctx.getSystemPromptOptions() : undefined;
+    skills = options?.skills;
+  } catch {
+    return "(unavailable)";
+  }
+
+  if (!Array.isArray(skills) || skills.length === 0) return "(none)";
+
+  const lines = skills
+    .map((skill) => {
+      const name = typeof skill?.name === "string" ? skill.name.trim() : "";
+      if (!name) return undefined;
+      const description = typeof skill?.description === "string" ? skill.description.replace(/\s+/g, " ").trim() : "";
+      return `- ${name}${description ? `: ${description}` : ""}`;
+    })
+    .filter((line): line is string => Boolean(line));
+
+  return lines.length > 0 ? truncateText(lines.join("\n"), 8_000) : "(none)";
 }
 
 function externalEditorCommand(): string | undefined {
@@ -469,7 +499,7 @@ async function showHandoffManager(ctx: any, files: HandoffFile[], currentProject
 
 async function manageHandoffs(pi: ExtensionAPI, ctx: any, initialQuery = ""): Promise<void> {
   if (!ctx.hasUI) {
-    ctx.ui.notify("/handoffs requires interactive or RPC UI", "error");
+    ctx.ui.notify("/handoff requires interactive or RPC UI", "error");
     return;
   }
 
@@ -488,7 +518,7 @@ async function manageHandoffs(pi: ExtensionAPI, ctx: any, initialQuery = ""): Pr
     }
 
     if (files.length === 0) {
-      ctx.ui.notify("No saved handoffs. Generate one with /handoff <goal>.", "warning");
+      ctx.ui.notify("No temporary handoffs. Generate one with /handoff <goal>.", "warning");
       return;
     }
 
@@ -581,15 +611,8 @@ async function editInExternalEditor(ctx: any, title: string, prefill: string): P
 export default function handoffExtension(pi: ExtensionAPI) {
   registerSuccessMessageRenderer(pi, "handoff");
 
-  pi.registerCommand("handoffs", {
-    description: "Manage saved handoff files: insert @references or delete old handoffs.",
-    handler: async (args, ctx) => {
-      await manageHandoffs(pi, ctx, (args ?? "").trim());
-    },
-  });
-
   pi.registerCommand("handoff", {
-    description: "Generate a markdown handoff file for review or continuation; run without args to manage saved handoffs.",
+    description: "Generate a temporary markdown handoff file for review or continuation; run without args to manage temporary handoffs.",
     handler: async (args, ctx) => {
       const goal = (args ?? "").trim();
       if (!goal) {
@@ -616,6 +639,7 @@ export default function handoffExtension(pi: ExtensionAPI) {
       }
 
       const gitSummary = await collectGitSummary(pi, ctx.cwd);
+      const availableSkills = formatAvailableSkills(ctx);
       const conversationText = serializeConversation(convertToLlm(messages));
       const sessionFile = ctx.sessionManager.getSessionFile() ?? "(ephemeral)";
       const leafId = ctx.sessionManager.getLeafId?.() ?? "(unknown)";
@@ -637,6 +661,7 @@ export default function handoffExtension(pi: ExtensionAPI) {
                 `## Handoff Goal\n${goal}`,
                 `## Session Metadata\nSession file: ${sessionFile}\nLeaf id: ${leafId}`,
                 `## Git Summary\n${gitSummary.text}`,
+                `## Available Skills\n${availableSkills}`,
                 `## Conversation History\n${conversationText}`,
               ].join("\n\n"),
             }],
@@ -686,7 +711,7 @@ export default function handoffExtension(pi: ExtensionAPI) {
 
       const timestamp = formatTimestamp();
       const slug = slugifyFilename(titleFromMarkdown(markdown, goal));
-      const directory = join(agentDir(), "handoffs", projectSlug(gitSummary.root, ctx.cwd));
+      const directory = join(handoffsRootDir(), projectSlug(gitSummary.root, ctx.cwd));
       await mkdir(directory, { recursive: true });
 
       const filePath = await uniqueHandoffPath(directory, `${timestamp}-${slug}.md`);
