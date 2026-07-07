@@ -13,6 +13,7 @@ local KC_RIGHTCMD = hs.keycodes.map["rightcmd"]
 local KC_RIGHTCTRL = hs.keycodes.map["rightctrl"]
 local KC_C = hs.keycodes.map["c"]
 local KC_H = hs.keycodes.map["h"]
+local KC_V = hs.keycodes.map["v"]
 local KC_1 = hs.keycodes.map["1"]
 
 -- eventtap 객체를 모듈 레벨에 저장하여 가비지 컬렉션 방지
@@ -63,12 +64,12 @@ local function setup_eventtap()
 		return nil
 	end)
 
-	-- keyDown 전용: ctrl+c, ctrl+h, alt+1 영어 전환
+	-- keyDown 전용: ctrl+c, ctrl+h, cmd+v(Kitty), alt+1 영어 전환
 	M._key_tap = hs.eventtap.new({ hs.eventtap.event.types.keyDown }, function(event)
 		local kc = event:getKeyCode()
 
 		-- 관심 없는 키는 즉시 반환 (getFlags 호출 자체를 생략)
-		if kc ~= KC_C and kc ~= KC_H and kc ~= KC_1 then
+		if kc ~= KC_C and kc ~= KC_H and kc ~= KC_V and kc ~= KC_1 then
 			return nil
 		end
 
@@ -76,6 +77,14 @@ local function setup_eventtap()
 
 		if (kc == KC_C or kc == KC_H) and flags.ctrl and not flags.cmd and not flags.alt and not flags.shift then
 			convert_to_english()
+			return nil
+		end
+
+		if kc == KC_V and flags.cmd and not flags.ctrl and not flags.alt and not flags.shift then
+			local app = hs.application.frontmostApplication()
+			if app and app:bundleID() == "net.kovidgoyal.kitty" then
+				convert_to_english()
+			end
 			return nil
 		end
 
