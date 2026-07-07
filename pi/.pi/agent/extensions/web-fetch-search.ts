@@ -518,12 +518,9 @@ export default function webFetchSearchExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "web_fetch",
     label: "Web Fetch",
-    description: `Fetch an HTTP(S) URL and return readable text/Markdown. HTML is converted via Jina Reader when possible, with a simple local fallback. Blocks local/private network targets.`,
-    promptSnippet: `Fetch an HTTP(S) URL and return readable text/Markdown. Use for public web pages and documentation. Blocks local/private network targets and truncates large output.`,
-    promptGuidelines: [
-      "Use web_fetch for public HTTP(S) pages when current web content is needed.",
-      "Do not use web_fetch for local/private network URLs, credentials, cookies, or logged-in pages.",
-    ],
+    description: `Fetch public HTTP(S) URLs as readable text/Markdown. Blocks local/private targets.`,
+    promptSnippet: `Fetch public web pages/docs; blocks local/private targets and truncates output.`,
+    promptGuidelines: ["Never use web_fetch for private/local/logged-in pages or credentials."],
     parameters: webFetchParameters,
     async execute(_toolCallId, params: WebFetchInput, signal) {
       const notes: string[] = [];
@@ -643,12 +640,11 @@ export default function webFetchSearchExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "web_search",
     label: "Web Search",
-    description: "Search the public web using DuckDuckGo HTML without API keys. Returns title, URL, and snippet for each result.",
-    promptSnippet: "Search the public web using DuckDuckGo HTML when up-to-date information or source links are needed. Include cited URLs in answers.",
+    description: "Search public web with DuckDuckGo HTML. Returns title, URL, and snippet.",
+    promptSnippet: "Search current public web information; cite source URLs.",
     promptGuidelines: [
-      "Use web_search when current public web information is needed and repository context is insufficient.",
-      "Use web_fetch on promising result URLs when exact page content matters.",
-      "Always cite source URLs when relying on web_search results.",
+      "Use web_search when current public web information is needed and repo context is insufficient.",
+      "Use web_fetch for exact page content; cite source URLs.",
     ],
     parameters: webSearchParameters,
     async execute(_toolCallId, params: WebSearchInput, signal) {

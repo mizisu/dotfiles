@@ -1008,12 +1008,9 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "search_symbols",
     label: "Search Symbols",
-    description: "Search Python workspace symbols using ty LSP. Returns compact symbol name, kind, and file:line locations.",
-    promptSnippet: "Search Python symbols with ty LSP before reading files when you need functions, classes, methods, or variables by name.",
-    promptGuidelines: [
-      "Use search_symbols for Python symbol names before reading files when the exact file is unknown.",
-      "Use grep instead of search_symbols when searching arbitrary file contents.",
-    ],
+    description: "Search Python symbols using ty LSP. Returns name, kind, and file:line locations.",
+    promptSnippet: "Find Python symbols by name before reading unknown files.",
+    promptGuidelines: ["Use search_symbols for Python symbols; use grep for arbitrary text."],
     parameters: searchSymbolsParameters,
     async execute(_toolCallId, params: { query: string; kind?: string; limit?: number }) {
       const query = params.query.trim();
@@ -1043,12 +1040,9 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "goto_definition",
     label: "Goto Definition",
-    description: "Find Python definitions for a symbol at a file position using ty LSP.",
-    promptSnippet: "Use goto_definition for Python code when you have a file position and need the defining location.",
-    promptGuidelines: [
-      "Use search_symbols first when you only know a symbol name.",
-      "Use goto_definition when you already have a Python file:line:character location.",
-    ],
+    description: "Find Python definitions from a file position using ty LSP.",
+    promptSnippet: "Find Python definitions from file:line:character.",
+    promptGuidelines: ["Use search_symbols first when you only know a symbol name."],
     parameters: navigationPositionParameters,
     async execute(_toolCallId, params: { path: string; line: number; character: number }) {
       try {
@@ -1076,12 +1070,9 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "find_references",
     label: "Find References",
-    description: "Find Python references for a symbol at a file position using ty LSP.",
-    promptSnippet: "Use find_references for Python code when you need usages of a symbol from a file position.",
-    promptGuidelines: [
-      "Use search_symbols first when you only know a symbol name.",
-      "Use find_references when you already have a Python file:line:character location.",
-    ],
+    description: "Find Python references from a file position using ty LSP.",
+    promptSnippet: "Find Python references from file:line:character.",
+    promptGuidelines: ["Use search_symbols first when you only know a symbol name."],
     parameters: findReferencesParameters,
     async execute(_toolCallId, params: { path: string; line: number; character: number; includeDeclaration?: boolean; limit?: number }) {
       try {

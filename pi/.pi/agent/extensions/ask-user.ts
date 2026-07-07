@@ -188,11 +188,10 @@ export default function askUserExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "ask_user",
     label: "Ask User",
-    description: "Ask the user one or more focused questions when their answer would materially change the work. Supports multi-select and custom answers.",
-    promptSnippet: "Use ask_user for targeted user decisions when relevant context is insufficient and the answer would materially change the implementation, safety, production, billing, credential, or tradeoff outcome.",
+    description: "Ask focused option questions when the answer would materially change the work. Supports multi-select and custom answers.",
+    promptSnippet: "Ask targeted option questions only for material decisions.",
     promptGuidelines: [
-      "Use ask_user for clear option-based user decisions when a user answer is genuinely needed.",
-      "When using ask_user, provide concise options with descriptions; put the recommended option first and append '(Recommended)' to its label."
+      "Use ask_user only for material decisions; concise options; append '(Recommended)' to the best label."
     ],
     parameters: questionParameters,
 

@@ -1,5 +1,5 @@
 import { complete, type Message } from "@mariozechner/pi-ai";
-import { BorderedLoader, convertToLlm, DynamicBorder, serializeConversation, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { BorderedLoader, convertToLlm, DynamicBorder, getAgentDir, serializeConversation, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Input, Key, SelectList, fuzzyFilter, matchesKey, truncateToWidth, type Component, type Focusable, type SelectItem } from "@mariozechner/pi-tui";
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
@@ -209,7 +209,7 @@ function projectSlug(root: string | undefined, cwd: string): string {
 }
 
 function handoffsRootDir(): string {
-  return join(tmpdir(), "pi-handoffs");
+  return join(getAgentDir(), "handoffs");
 }
 
 function fallbackTitleFromFilename(fileName: string): string {
@@ -518,7 +518,7 @@ async function manageHandoffs(pi: ExtensionAPI, ctx: any, initialQuery = ""): Pr
     }
 
     if (files.length === 0) {
-      ctx.ui.notify("No temporary handoffs. Generate one with /handoff <goal>.", "warning");
+      ctx.ui.notify("No handoffs. Generate one with /handoff <goal>.", "warning");
       return;
     }
 
@@ -612,7 +612,7 @@ export default function handoffExtension(pi: ExtensionAPI) {
   registerSuccessMessageRenderer(pi, "handoff");
 
   pi.registerCommand("handoff", {
-    description: "Generate a temporary markdown handoff file for review or continuation; run without args to manage temporary handoffs.",
+    description: "Generate a markdown handoff file for review or continuation; run without args to manage handoffs.",
     handler: async (args, ctx) => {
       const goal = (args ?? "").trim();
       if (!goal) {

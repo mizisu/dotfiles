@@ -1,11 +1,11 @@
 {
-  "lastChangelogVersion": "0.79.10",
+  "lastChangelogVersion": "0.80.3",
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.5",
   "mediumProvider": "openai-codex",
-  "mediumModel": "gpt-5.3-codex-spark",
+  "mediumModel": "gpt-5.4-mini",
   "smallProvider": "openai-codex",
-  "smallModel": "gpt-5.4-mini",
+  "smallModel": "gpt-5.3-codex-spark",
   "theme": "catppuccin-macchiato",
   "editorPaddingX": 1,
   "defaultThinkingLevel": "xhigh",
@@ -22,8 +22,7 @@
   "showHardwareCursor": true,
   "doubleEscapeAction": "tree",
   "packages": [
-    "https://github.com/davebcn87/pi-autoresearch",
-    "git:github.com/DietrichGebert/ponytail"
+    "https://github.com/davebcn87/pi-autoresearch"
   ],
   "compaction": {
     "enabled": true

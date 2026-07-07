@@ -193,12 +193,9 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "fuzzy_find",
     label: "Fuzzy Find",
-    description: "Find files by fuzzy path matching using fzf. Use when you know part of a file name or path.",
-    promptSnippet: "Find files by fuzzy path matching using fzf before reading when the exact path is unknown.",
-    promptGuidelines: [
-      "Use fuzzy_find when you know part of a file name or path but not the exact location.",
-      "Use grep or search_symbols instead of fuzzy_find when searching file contents or symbols.",
-    ],
+    description: "Find files by fuzzy path matching when you know part of a path.",
+    promptSnippet: "Find files by fuzzy path when exact path is unknown.",
+    promptGuidelines: ["Use fuzzy_find for paths; use grep/search_symbols for contents or symbols."],
     parameters: fuzzyFindParameters,
     async execute(_toolCallId, params: FuzzyFindInput, signal, _onUpdate, ctx) {
       const query = params.query.trim();

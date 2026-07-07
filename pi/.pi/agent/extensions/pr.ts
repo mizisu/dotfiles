@@ -20,6 +20,7 @@ const STYLE_TITLE_RENDER_LIMIT = 80;
 const STYLE_BODY_RENDER_LIMIT = 18;
 const MAX_STYLE_BODY_CHARS = 1_200;
 const MAX_STYLE_TOTAL_CHARS = 28_000;
+const MAX_GENERATION_INSTRUCTIONS_CHARS = 8_000;
 
 const SENSITIVE_EXCLUDE_PATHS = [
   ":(exclude).env",
@@ -52,11 +53,13 @@ Return ONLY valid JSON, no markdown fences:
   "body": "Markdown PR body"
 }
 
-Default style:
+Default style (only when explicit user generation instructions do not override it):
 - 간결한 한국어.
 - Write for a teammate who has not followed the implementation background, unless the directives say this is a stacked/existing PR.
 - Prefer reviewer context over code archaeology, but keep enough implementation context for review when the repository/author style does so.
-- When author PR style references are provided, match their Korean tone, title shape, section density, and implementation detail level. Use them for style only; never copy their facts, links, screenshots, issue IDs, file names, or claims unless independently present in the current git data.
+- When author PR style references are provided, match their Korean tone, title shape, section density, and implementation detail level unless explicit user instructions override it. Use them for style only; never copy their facts, links, screenshots, issue IDs, file names, or claims unless independently present in the current git data.
+- Explicit user generation instructions have the highest priority for output language, format, tone, and section density unless they conflict with grounding rules.
+- If explicit user instructions request English or another language, write the title and all generated PR body prose in that language. Do not keep Korean solely because the default style, template, branch name, commit messages, or author examples are Korean.
 
 Grounding rules:
 - Use ONLY the provided git data, PR template, branch/base metadata, and explicit generation directives.
@@ -74,7 +77,8 @@ Title rules:
 - Do not force Conventional Commit prefixes. Use them only when the current branch/commits or author examples clearly fit.
 
 Body/template rules:
-- Preserve the provided PR template's heading order, checklists, HTML comments, and placeholders unless a section is explicitly optional and irrelevant.
+- Preserve the provided PR template's section order, checklists, HTML comments, and placeholders unless a section is explicitly optional and irrelevant.
+- By default keep template headings/comments/placeholders as provided. If explicit user instructions request another output language, translate retained headings/comments/placeholders or remove optional comments so the final body follows the requested language while preserving the same section intent.
 - Follow each template section's HTML comment guide; the template is the source of truth for section intent.
 - 배경/Why: explain only what need/problem would remain without this PR. Do not describe implementation details, options, or policy mechanics here.
 - 변경 내용/What/Summary: summarize changed behavior/capability. Use concise bullets; broad PRs may need more than 5.
@@ -99,6 +103,7 @@ interface GeneratedPr {
 interface ParsedArgs {
   base?: string;
   title?: string;
+  generationInstructions?: string;
   noOpen: boolean;
 }
 
@@ -233,7 +238,7 @@ function normalizeBranch(value: string | undefined): string | undefined {
 function parsePrArgs(args: string | undefined): ParsedArgs {
   const tokens = shellWords(args ?? "");
   const parsed: ParsedArgs = { noOpen: false };
-  let baseConsumed = false;
+  const instructionTokens: string[] = [];
 
   for (let index = 0; index < tokens.length; index++) {
     const token = tokens[index];
@@ -243,26 +248,30 @@ function parsePrArgs(args: string | undefined): ParsedArgs {
     }
     if (token === "--base") {
       parsed.base = normalizeBranch(tokens[++index]);
-      baseConsumed = true;
       continue;
     }
     if (token.startsWith("--base=")) {
       parsed.base = normalizeBranch(token.slice("--base=".length));
-      baseConsumed = true;
       continue;
     }
     if (token === "--title") {
-      parsed.title = tokens.slice(index + 1).join(" ").trim() || undefined;
-      break;
+      parsed.title = tokens[++index]?.trim() || undefined;
+      continue;
     }
     if (token.startsWith("--title=")) {
       parsed.title = token.slice("--title=".length).trim() || undefined;
       continue;
     }
-    if (!token.startsWith("-") && !baseConsumed && !parsed.base) {
-      parsed.base = normalizeBranch(token);
-      baseConsumed = true;
-    }
+    instructionTokens.push(token);
+  }
+
+  const generationInstructions = instructionTokens.join(" ").trim();
+  if (generationInstructions) {
+    parsed.generationInstructions = truncateText(
+      generationInstructions,
+      MAX_GENERATION_INSTRUCTIONS_CHARS,
+      "[generation instructions truncated]",
+    );
   }
 
   return parsed;
@@ -948,6 +957,13 @@ function inferChangeNature(files: string[]): string {
   return productLike ? "제품 기능 중심" : "판단 어려움";
 }
 
+function inferRequestedOutputLanguage(instructions: string | undefined): string | undefined {
+  if (!instructions) return undefined;
+  if (/영어|영문|english/i.test(instructions)) return "English";
+  if (/한국어|한글|국문|korean/i.test(instructions)) return "Korean";
+  return undefined;
+}
+
 function buildModelInput(params: {
   template: string;
   current: string;
@@ -957,6 +973,7 @@ function buildModelInput(params: {
   existing?: ExistingPr;
   context: ChangeContext;
   authorStyle?: string;
+  generationInstructions?: string;
 }): string {
   const issueKey = issueKeyFromBranch(params.current);
   const reviewerContext = params.baseChoice.reason === "existing-pr" || params.baseChoice.reason.startsWith("stacked")
@@ -964,9 +981,11 @@ function buildModelInput(params: {
     : "Assume the reviewer has no prior implementation background.";
   const changeNature = inferChangeNature(params.context.fileNames);
   const sourceLabel = params.context.source === "working-tree" ? "working-tree-only" : "committed changes";
+  const requestedLanguage = inferRequestedOutputLanguage(params.generationInstructions);
 
   return [
-    `## Generation directives\n- Draft source: ${sourceLabel}\n- Change nature hint: ${changeNature}\n- Reviewer context: ${reviewerContext}\n- Final base: ${params.base}\n- Base ref used for git data: ${params.baseRef}\n- Base selection reason: ${params.baseChoice.reason}\n${params.baseChoice.recommendedBase ? `- Recommended stacked base: ${params.baseChoice.recommendedBase}` : ""}\n${params.baseChoice.overrideWarning ? `- Broad-base warning: ${params.baseChoice.overrideWarning}` : ""}\n${issueKey ? `- Issue key prefix: [${issueKey}]` : ""}\n${params.existing ? `- Existing PR: #${params.existing.number} ${params.existing.url}` : ""}`,
+    `## Generation directives\n- Draft source: ${sourceLabel}\n- Change nature hint: ${changeNature}\n- Reviewer context: ${reviewerContext}\n${requestedLanguage ? `- Requested output language: ${requestedLanguage} (explicit user instruction; overrides default Korean and author style language)` : ""}\n- Final base: ${params.base}\n- Base ref used for git data: ${params.baseRef}\n- Base selection reason: ${params.baseChoice.reason}\n${params.baseChoice.recommendedBase ? `- Recommended stacked base: ${params.baseChoice.recommendedBase}` : ""}\n${params.baseChoice.overrideWarning ? `- Broad-base warning: ${params.baseChoice.overrideWarning}` : ""}\n${issueKey ? `- Issue key prefix: [${issueKey}]` : ""}\n${params.existing ? `- Existing PR: #${params.existing.number} ${params.existing.url}` : ""}`,
+    params.generationInstructions ? `## Explicit user generation instructions\n${params.generationInstructions}` : "",
     params.authorStyle ? `## Author PR style reference (style only; do not copy facts)\n${params.authorStyle}` : "",
     `## PR Template\n${params.template}`,
     `## Branch\n${params.current} → ${params.base}`,
@@ -1285,7 +1304,7 @@ export default function prExtension(pi: ExtensionAPI) {
   registerSuccessMessageRenderer(pi, "pr");
 
   pi.registerCommand("pr", {
-    description: "Create or update a GitHub PR with stacked-base detection and Korean reviewer-focused draft generation.",
+    description: "Create or update a GitHub PR. Command text is used as generation instructions; use --base to override base.",
     handler: async (args, ctx) => {
       if (!ctx.hasUI) {
         ctx.ui.notify("/pr requires interactive or RPC UI confirmation", "error");
@@ -1388,6 +1407,7 @@ export default function prExtension(pi: ExtensionAPI) {
           existing,
           context,
           authorStyle,
+          generationInstructions: parsed.generationInstructions,
         });
 
         setStatus("Generating author-style PR draft…", [source === "working-tree" ? "working tree scope" : "committed scope", "Why + What"]);

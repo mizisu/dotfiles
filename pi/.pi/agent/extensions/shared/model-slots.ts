@@ -2,7 +2,7 @@ import { SettingsManager } from "@mariozechner/pi-coding-agent";
 
 export interface ResolvedModelSlot {
   model: any;
-  auth: { apiKey?: string; headers?: Record<string, string> };
+  auth: { apiKey?: string; headers?: Record<string, string>; env?: Record<string, string> };
   reference: string;
 }
 
