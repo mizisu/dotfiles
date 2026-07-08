@@ -1,3 +1,4 @@
+// @ts-nocheck -- pi runtime resolves extension package imports.
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Container, Markdown, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { renderMermaidASCII } from "beautiful-mermaid";
@@ -26,6 +27,12 @@ type PatchState = {
   skipMermaidMarkdown: WeakSet<object>;
 };
 
+interface PiTheme {
+  name?: string;
+  fg?: (color: string, text: string) => string;
+  getColorMode?: () => string;
+}
+
 const PATCH_STATE_KEY = Symbol.for("pi.mermaid.inline.patch");
 const MAX_CACHE_ENTRIES = 80;
 const MAX_SOURCE_CHARS = 16_000;
@@ -33,6 +40,13 @@ const INLINE_OVERFLOW_COLS = 24;
 const INLINE_OVERFLOW_RATIO = 1.2;
 const supportedLang = /^mermaid\b/i;
 const MERMAID_FENCE_PATTERN = /^```[^\S\r\n]*mermaid\b/im;
+const THEME_KEYS = [
+  Symbol.for("@mariozechner/pi-coding-agent:theme"),
+  Symbol.for("@earendil-works/pi-coding-agent:theme"),
+];
+const MERMAID_BORDER_CHARS = new Set(Array.from("┌┐└┘├┤┬┴┼╭╮╰╯╔╗╚╝╠╣╦╩╬+"));
+const MERMAID_LINE_CHARS = new Set(Array.from("│─┃━┆┇┊┋┄┅┈┉╌╍-|"));
+const MERMAID_ARROW_CHARS = new Set(Array.from("▶◀▲▼►◄↑↓←→<>"));
 
 const renderCache = new Map<string, string[] | null>();
 
@@ -65,7 +79,8 @@ function isMarkdownExpanded(instance: unknown): boolean {
 
 function cacheGet(key: string): string[] | null | undefined {
   if (!renderCache.has(key)) return undefined;
-  const value = renderCache.get(key)!;
+  const value = renderCache.get(key);
+  if (value === undefined) return undefined;
   renderCache.delete(key);
   renderCache.set(key, value);
   return value;
@@ -80,31 +95,89 @@ function cacheSet(key: string, value: string[] | null): void {
   }
 }
 
+function currentPiTheme(): PiTheme | undefined {
+  const globals = globalThis as unknown as { [key: symbol]: PiTheme | undefined };
+  for (const key of THEME_KEYS) {
+    const theme = globals[key];
+    if (theme?.fg) return theme;
+  }
+  return undefined;
+}
+
+function themeSignature(): string {
+  const theme = currentPiTheme();
+  return `${theme?.name ?? "default"}:${theme?.getColorMode?.() ?? ""}`;
+}
+
+function mermaidColorToken(char: string): string | undefined {
+  if (char === " ") return undefined;
+  if (MERMAID_ARROW_CHARS.has(char)) return "accent";
+  if (MERMAID_BORDER_CHARS.has(char)) return "border";
+  if (MERMAID_LINE_CHARS.has(char)) return "muted";
+  return "mdCodeBlock";
+}
+
+function applyThemeColor(theme: PiTheme, token: string | undefined, text: string): string {
+  if (!token || !text) return text;
+  try {
+    return theme.fg?.(token, text) ?? text;
+  } catch {
+    return text;
+  }
+}
+
+function styleMermaidLine(line: string): string {
+  const theme = currentPiTheme();
+  if (!theme?.fg) return line;
+
+  let result = "";
+  let currentToken: string | undefined;
+  let buffer = "";
+
+  const flush = () => {
+    result += applyThemeColor(theme, currentToken, buffer);
+    buffer = "";
+  };
+
+  for (const char of Array.from(line)) {
+    const token = mermaidColorToken(char);
+    if (token !== currentToken) {
+      flush();
+      currentToken = token;
+    }
+    buffer += char;
+  }
+
+  flush();
+  return result;
+}
+
 function renderMermaidBlock(token: MarkdownToken, width: number, nextTokenType?: string): string[] | null {
   if (token.type !== "code" || !supportedLang.test(token.lang ?? "") || typeof token.text !== "string") return null;
 
   const source = token.text.trim();
   if (!source || source.length > MAX_SOURCE_CHARS) return null;
 
-  const cacheKey = `${width}\0${source}`;
+  const cacheKey = `${width}\0${themeSignature()}\0${source}`;
   const cached = cacheGet(cacheKey);
   if (cached !== undefined) return cached ? [...cached] : null;
 
   try {
-    const ascii = renderMermaidASCII(source, { colorMode: "none", useAscii: true }).trimEnd();
+    const ascii = renderMermaidASCII(source, { colorMode: "none" }).trimEnd();
     if (!ascii) {
       cacheSet(cacheKey, null);
       return null;
     }
 
-    const lines = ascii.split("\n").map((line) => truncateToWidth(line, Math.max(1, width), "…"));
-    const maxLineWidth = lines.reduce((max, line) => Math.max(max, visibleWidth(line)), 0);
+    const plainLines = ascii.split("\n").map((line) => truncateToWidth(line, Math.max(1, width), "…"));
+    const maxLineWidth = plainLines.reduce((max, line) => Math.max(max, visibleWidth(line)), 0);
     const maxInlineWidth = Math.max(width + INLINE_OVERFLOW_COLS, Math.floor(width * INLINE_OVERFLOW_RATIO));
     if (maxLineWidth > maxInlineWidth) {
       cacheSet(cacheKey, null);
       return null;
     }
 
+    const lines = plainLines.map(styleMermaidLine);
     const rendered = nextTokenType && nextTokenType !== "space" ? [...lines, ""] : lines;
     cacheSet(cacheKey, rendered);
     return [...rendered];
@@ -137,6 +210,11 @@ function installMarkdownPatch(): void {
       }
 
       if (isMarkdownExpanded(this)) {
+        const custom = renderMermaidBlock(token as MarkdownToken, width);
+        if (custom) {
+          const source = state.originalRenderToken.call(this, token, width, nextTokenType, styleContext);
+          return [...custom, "", ...source];
+        }
         return state.originalRenderToken.call(this, token, width, nextTokenType, styleContext);
       }
 

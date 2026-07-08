@@ -192,7 +192,7 @@ function formatWriteCall(
   return text;
 }
 
-export default function writeTailPreviewExtension(pi: ExtensionAPI) {
+export default function writeExtension(pi: ExtensionAPI) {
   const baseWriteTool = createWriteToolDefinition(process.cwd());
 
   pi.registerTool({

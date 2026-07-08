@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { Text } from "@mariozechner/pi-tui";
 import { spawn } from "node:child_process";
 import { showFuzzyFilePicker } from "./file-picker.js";
 import { existsSync } from "node:fs";
@@ -9,6 +10,15 @@ interface FuzzyFindInput {
   query: string;
   path?: string;
   limit?: number;
+}
+
+interface FuzzyFindDetails {
+  query: string;
+  scope?: string;
+  totalFiles: number;
+  searchedFiles: number;
+  shown: number;
+  error?: string;
 }
 
 const DEFAULT_LIMIT = 30;
@@ -50,6 +60,20 @@ const fuzzyFindParameters = {
 
 function toPosixPath(value: string): string {
   return value.replace(/\\/g, "/");
+}
+
+function truncateString(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+function formatQueryForUi(query: string | undefined, theme: any): string {
+  const trimmed = query?.trim();
+  return trimmed ? theme.fg("accent", `"${truncateString(trimmed, 70)}"`) : theme.fg("warning", "(empty query)");
+}
+
+function formatScopeForUi(scope: string | undefined, theme: any): string {
+  return scope ? theme.fg("dim", ` under ${truncateString(scope, 45)}`) : "";
 }
 
 function normalizeToolPath(cwd: string, value: string | undefined): string | undefined {
@@ -237,9 +261,45 @@ export default function (pi: ExtensionAPI) {
         const message = error instanceof Error ? error.message : String(error);
         return {
           content: [{ type: "text", text: `fuzzy_find failed: ${message}` }],
-          details: { query, scope, totalFiles: allFiles.length, searchedFiles: files.length, shown: 0 },
+          details: { query, scope, totalFiles: allFiles.length, searchedFiles: files.length, shown: 0, error: message },
         };
       }
+    },
+    renderCall(args: Partial<FuzzyFindInput> | undefined, theme: any) {
+      let text = theme.fg("toolTitle", theme.bold("fuzzy_find ")) + formatQueryForUi(args?.query, theme);
+      const rawScope = args?.path?.trim();
+      if (rawScope) text += formatScopeForUi(rawScope.replace(/^@/, ""), theme);
+      if (typeof args.limit === "number") text += theme.fg("dim", ` limit ${args.limit}`);
+      return new Text(text, 0, 0);
+    },
+    renderResult(result: any, { expanded }: any, theme: any) {
+      const details = result.details as FuzzyFindDetails | undefined;
+      if (!details?.query) {
+        const text = result.content?.[0];
+        return new Text(text?.type === "text" ? text.text : "", 0, 0);
+      }
+
+      if (details.error) {
+        return new Text(theme.fg("error", `✗ ${details.error}`) + " " + formatQueryForUi(details.query, theme), 0, 0);
+      }
+
+      const query = formatQueryForUi(details.query, theme);
+      const scope = formatScopeForUi(details.scope, theme);
+      const count = `${details.shown}/${details.searchedFiles} file(s)`;
+      let text = details.searchedFiles === 0
+        ? `${theme.fg("warning", "No files")} to search for ${query}${scope}`
+        : details.shown > 0
+          ? `${theme.fg("success", "✓")} ${theme.fg("accent", count)} fuzzy-matching ${query}${scope}`
+          : `${theme.fg("warning", "No matches")} for ${query}${scope}`;
+
+      if (details.shown > 0) {
+        const matches = String(result.content?.[0]?.text ?? "").split("\n").slice(1).filter(Boolean);
+        const visibleMatches = matches.slice(0, expanded ? 12 : 5);
+        for (const match of visibleMatches) text += `\n  ${theme.fg("dim", truncateString(match, 110))}`;
+        if (details.shown > visibleMatches.length) text += `\n  ${theme.fg("dim", `… ${details.shown - visibleMatches.length} more`)}`;
+      }
+
+      return new Text(text, 0, 0);
     },
   });
 

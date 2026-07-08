@@ -8,3 +8,6 @@ agent/shake-artifacts
 .env.*
 agent/extensions/mcporter/mcporter-cache.json
 trust.json
+
+agent/extensions/learnable/
+
