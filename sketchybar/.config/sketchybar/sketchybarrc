@@ -223,6 +223,23 @@ CALENDAR=(
 sketchybar --add item calendar right \
            --set calendar "${CALENDAR[@]}"
 
+# Codex usage (remaining quota)
+# Right-side items are prepended, so adding this after Calendar places it to its left.
+CODEX_USAGE=(
+  update_freq=300
+  icon=":codex:"
+  icon.font="sketchybar-app-font:Regular:16.0"
+  icon.color=$GREEN
+  label.color=$GREEN
+  background.color=$BG_SEC_COLR
+  click_script="open https://chatgpt.com/codex/settings/usage"
+  script="$PLUGIN_DIR/codex_usage.sh"
+)
+
+sketchybar --add item codex_usage right \
+           --set codex_usage "${CODEX_USAGE[@]}" \
+           --subscribe codex_usage system_woke
+
 # ============================================
 # Finalize
 # ============================================
