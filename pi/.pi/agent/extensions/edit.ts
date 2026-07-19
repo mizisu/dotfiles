@@ -4,11 +4,11 @@ import {
   getLanguageFromPath,
   highlightCode,
   keyHint,
-  renderDiff,
   type ExtensionAPI,
   type ThemeColor,
 } from "@mariozechner/pi-coding-agent";
 import { Container, Spacer, Text, type Component } from "@mariozechner/pi-tui";
+import { blankLineGutter, lineGutter, lineNumberWidth, numberedLine, type LineMarker } from "./shared/tool-line-display.js";
 
 const READ_COLLAPSED_PREVIEW_LINES = 10;
 
@@ -130,7 +130,7 @@ function formatReadResultWithLineNumbers(
   const remaining = Math.max(0, contentLines.length - maxContentLines);
   const firstLineNumber = lineOffsetFromArgs(args);
   const lastVisibleLineNumber = firstLineNumber + Math.min(contentLines.length, maxContentLines) - 1;
-  const gutterWidth = Math.max(String(firstLineNumber).length, String(lastVisibleLineNumber).length);
+  const gutterWidth = lineNumberWidth(firstLineNumber, lastVisibleLineNumber);
   const displayLines: string[] = [];
   let contentIndex = 0;
   let shownContent = 0;
@@ -140,7 +140,10 @@ function formatReadResultWithLineNumbers(
   const insertCollapsedHint = () => {
     if (remaining <= 0 || insertedCollapsedHint) return;
     displayLines.push(
-      `${theme.fg("muted", `... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`,
+      `${blankLineGutter(theme, gutterWidth)}${theme.fg("muted", `... (${remaining} more lines,`)} ${keyHint(
+        "app.tools.expand",
+        "to expand",
+      )}${theme.fg("muted", ")")}`,
     );
     insertedCollapsedHint = true;
   };
@@ -151,15 +154,14 @@ function formatReadResultWithLineNumbers(
       if (entry.line === "") {
         displayLines.push("");
       } else {
-        displayLines.push(theme.fg("warning", replaceTabs(entry.line)));
+        displayLines.push(`${blankLineGutter(theme, gutterWidth)}${theme.fg("warning", replaceTabs(entry.line))}`);
       }
       continue;
     }
 
     const highlightedLine = highlightedContent[contentIndex] ?? theme.fg("toolOutput", replaceTabs(entry.line));
     if (shownContent < maxContentLines) {
-      const gutter = theme.fg("dim", `${String(lineNumber).padStart(gutterWidth, " ")} │ `);
-      displayLines.push(`${gutter}${highlightedLine}`);
+      displayLines.push(numberedLine(theme, lineNumber, gutterWidth, highlightedLine));
       shownContent++;
     }
     contentIndex++;
@@ -182,30 +184,47 @@ function diffColor(prefix: string): ThemeColor {
   return "toolDiffContext";
 }
 
-function highlightDiffContent(content: string, lang: string | undefined, theme: ThemeLike): string {
+function diffMarker(prefix: string): LineMarker {
+  return prefix === "+" || prefix === "-" ? prefix : " ";
+}
+
+function parseDiffLineNumber(lineNum: string): number | undefined {
+  const value = Number.parseInt(lineNum.trim(), 10);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function highlightDiffContent(content: string, lang: string | undefined, theme: ThemeLike, fallbackColor: ThemeColor): string {
   const normalized = replaceTabs(content);
-  if (!lang) return theme.fg("toolOutput", normalized);
-  return highlightCode(normalized, lang)[0] ?? "";
+  if (!lang) return theme.fg(fallbackColor, normalized);
+  return highlightCode(normalized, lang)[0] ?? theme.fg(fallbackColor, normalized);
 }
 
 function renderSyntaxDiff(diffText: string, rawPath: string | null, theme: ThemeLike): string {
   const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
-  if (!lang) return renderDiff(diffText);
+  const lines = diffText.split("\n").map((line) => ({ line, parsed: parseDiffLine(line) }));
+  const gutterWidth = lineNumberWidth(
+    ...lines
+      .map(({ parsed }) => (parsed ? parseDiffLineNumber(parsed.lineNum) : undefined))
+      .filter((lineNumber): lineNumber is number => lineNumber !== undefined),
+  );
 
-  return diffText
-    .split("\n")
-    .map((line) => {
-      const parsed = parseDiffLine(line);
-      if (!parsed) return theme.fg("toolDiffContext", line);
-
-      const color = diffColor(parsed.prefix);
-      const gutter = theme.fg(color, `${parsed.prefix}${parsed.lineNum} `);
-
-      if (parsed.lineNum.trim() === "" && parsed.content.trim() === "...") {
-        return theme.fg("toolDiffContext", `${parsed.prefix}${parsed.lineNum} ${parsed.content}`);
+  return lines
+    .map(({ line, parsed }) => {
+      if (!parsed) {
+        return `${blankLineGutter(theme, gutterWidth, "toolDiffContext")}${theme.fg("toolDiffContext", replaceTabs(line))}`;
       }
 
-      return `${gutter}${highlightDiffContent(parsed.content, lang, theme)}`;
+      const color = diffColor(parsed.prefix);
+      const marker = diffMarker(parsed.prefix);
+      const lineNumber = parseDiffLineNumber(parsed.lineNum);
+      const gutter = lineNumber === undefined
+        ? blankLineGutter(theme, gutterWidth, color, marker)
+        : lineGutter(theme, lineNumber, gutterWidth, color, marker);
+      const content = parsed.content.trim() === "..."
+        ? theme.fg(color, replaceTabs(parsed.content))
+        : highlightDiffContent(parsed.content, lang, theme, color);
+
+      return `${gutter}${content}`;
     })
     .join("\n");
 }

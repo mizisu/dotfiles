@@ -7,6 +7,7 @@ import {
   type ThemeColor,
 } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
+import { blankLineGutter, lineNumberWidth, numberedLine } from "./shared/tool-line-display.js";
 
 const COLLAPSED_PREVIEW_LINES = 10;
 const WRITE_PARTIAL_FULL_HIGHLIGHT_LINES = 50;
@@ -175,19 +176,30 @@ function formatWriteCall(
   const start = followTail ? Math.max(0, lines.length - maxLines) : 0;
   const displayLines = lines.slice(start, start + maxLines);
   const remainingAfter = lines.length - start - displayLines.length;
+  const gutterWidth = lineNumberWidth(1, totalLines);
+  const previewLines: string[] = [];
 
   if (start > 0) {
-    text += theme.fg("muted", `\n... (${start} earlier lines, following latest output)`);
+    previewLines.push(`${blankLineGutter(theme, gutterWidth)}${theme.fg("muted", `... (${start} earlier lines, following latest output)`)}`);
   }
 
-  text += `\n\n${displayLines.map((line) => (lang ? line : theme.fg("toolOutput", replaceTabs(line)))).join("\n")}`;
+  previewLines.push(
+    ...displayLines.map((line, index) => {
+      const content = lang ? line : theme.fg("toolOutput", replaceTabs(line));
+      return numberedLine(theme, start + index + 1, gutterWidth, content);
+    }),
+  );
 
   if (remainingAfter > 0) {
-    text += `${theme.fg("muted", `\n... (${remainingAfter} more lines, ${totalLines} total,`)} ${keyHint(
-      "app.tools.expand",
-      "to expand",
-    )}${theme.fg("muted", ")")}`;
+    previewLines.push(
+      `${blankLineGutter(theme, gutterWidth)}${theme.fg("muted", `... (${remainingAfter} more lines, ${totalLines} total,`)} ${keyHint(
+        "app.tools.expand",
+        "to expand",
+      )}${theme.fg("muted", ")")}`,
+    );
   }
+
+  text += `\n\n${previewLines.join("\n")}`;
 
   return text;
 }
