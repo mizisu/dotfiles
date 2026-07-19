@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
-const LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+const LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 type ThinkingLevel = (typeof LEVELS)[number];
 
 const ALIASES = {
@@ -14,7 +14,7 @@ const ALIASES = {
   mid: "medium",
   high: "high",
   xhigh: "xhigh",
-  max: "xhigh",
+  max: "max",
 } as const satisfies Record<string, ThinkingLevel>;
 
 type EffortInput = keyof typeof ALIASES;

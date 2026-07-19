@@ -3,6 +3,6 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "mcporter": "^0.8.1"
+    "mcporter": "^0.12.3"
   }
 }

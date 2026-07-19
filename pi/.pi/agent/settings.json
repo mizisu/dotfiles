@@ -1,18 +1,19 @@
 {
-  "lastChangelogVersion": "0.80.3",
+  "lastChangelogVersion": "0.80.7",
   "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-5.5",
+  "defaultModel": "gpt-5.6-sol",
   "mediumProvider": "openai-codex",
   "mediumModel": "gpt-5.4-mini",
   "smallProvider": "openai-codex",
   "smallModel": "gpt-5.3-codex-spark",
   "theme": "catppuccin-macchiato",
   "editorPaddingX": 1,
-  "defaultThinkingLevel": "xhigh",
+  "defaultThinkingLevel": "max",
   "enabledModels": [
     "openai-codex/gpt-5.3-codex-spark",
-    "openai-codex/gpt-5.5",
-    "openai-codex/gpt-5.4"
+    "openai-codex/gpt-5.6-sol",
+    "openai-codex/gpt-5.6-terra",
+    "openai-codex/gpt-5.6-luna"
   ],
   "hideThinkingBlock": false,
   "terminal": {

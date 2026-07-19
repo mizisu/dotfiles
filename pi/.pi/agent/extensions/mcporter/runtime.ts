@@ -6,6 +6,7 @@ import {
   createRuntime,
   describeConnectionIssue,
   type Runtime,
+  type RuntimeLogger,
   type ServerDefinition,
 } from "mcporter";
 import {
@@ -46,6 +47,14 @@ export interface RefreshResult {
 
 const HOME_CONFIG_PATH = join(homedir(), ".mcporter", "mcporter.json");
 const PROJECT_CONFIG_PATH = "config/mcporter.json";
+
+// mcporter's default console logger bypasses pi's TUI and can leave OAuth
+// progress text painted over the editor. The extension reports status via ctx.ui.
+const SILENT_RUNTIME_LOGGER: RuntimeLogger = {
+  info: () => undefined,
+  warn: () => undefined,
+  error: () => undefined,
+};
 
 function sanitizeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -228,6 +237,7 @@ export class McpRuntimeManager {
     const rootDir = ctx?.cwd ?? this.sessionCwd;
     this.runtimePromise = createRuntime({
       rootDir,
+      logger: SILENT_RUNTIME_LOGGER,
       clientInfo: {
         name: "pi-mcporter",
         version: "0.1.0",
