@@ -1,51 +1,16 @@
-import { spawnSync } from "node:child_process";
 import { CustomEditor, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { matchesKey, type KeyId } from "@mariozechner/pi-tui";
+import {
+  fingerprint,
+  isMatchingDoublePaste,
+  longPasteFingerprint,
+  type PasteCandidate,
+} from "./shared/double-paste.ts";
 
 const PICKER_TRIGGER_CHARS = new Set(["@", "#"]);
-const EXPANDED_PASTE_KEY = "ctrl+x" as const satisfies KeyId;
-
-function runClipboardCommand(command: string, args: string[]): string | undefined {
-  const result = spawnSync(command, args, {
-    encoding: "utf-8",
-    maxBuffer: 50 * 1024 * 1024,
-  });
-
-  if (result.error || result.status !== 0) return undefined;
-  return result.stdout ?? "";
-}
-
-function readClipboardText(): string | undefined {
-  if (process.platform === "darwin") return runClipboardCommand("pbpaste", []);
-
-  if (process.platform === "win32") {
-    return runClipboardCommand("powershell.exe", ["-NoProfile", "-Command", "Get-Clipboard -Raw"]);
-  }
-
-  if (process.env.TERMUX_VERSION) return runClipboardCommand("termux-clipboard-get", []);
-
-  if (process.env.WAYLAND_DISPLAY) {
-    const text = runClipboardCommand("wl-paste", ["--no-newline"]);
-    if (text !== undefined) return text;
-  }
-
-  return (
-    runClipboardCommand("xclip", ["-selection", "clipboard", "-o"]) ??
-    runClipboardCommand("xsel", ["--clipboard", "--output"])
-  );
-}
-
-function cleanPastedText(text: string): string {
-  return text
-    .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n")
-    .replace(/\t/g, "    ")
-    .split("")
-    .filter((char) => char === "\n" || char.charCodeAt(0) >= 32)
-    .join("");
-}
 
 class PiEditor extends CustomEditor {
+  private pasteCandidate: PasteCandidate | undefined;
+
   private isPickerTriggerAllowed(): boolean {
     const { line, col } = this.getCursor();
     if (col <= 0) return true;
@@ -60,21 +25,33 @@ class PiEditor extends CustomEditor {
     this.insertTextAtCursor(char);
   }
 
-  private handleExpandedClipboardPaste(): void {
-    const text = readClipboardText();
-    if (!text) return;
+  private handleDoublePaste(data: string): boolean {
+    const pasteFingerprint = longPasteFingerprint(data);
+    if (!pasteFingerprint) return false;
 
-    const cleanText = cleanPastedText(text);
-    if (!cleanText) return;
+    const editorText = this.getExpandedText();
+    if (isMatchingDoublePaste(this.pasteCandidate, pasteFingerprint, editorText, Date.now())) {
+      this.setText(editorText);
+      this.pasteCandidate = undefined;
+      return true;
+    }
 
-    this.insertTextAtCursor(cleanText);
+    super.handleInput(data);
+    const updatedEditorText = this.getExpandedText();
+    this.pasteCandidate =
+      updatedEditorText === editorText
+        ? undefined
+        : {
+            pasteFingerprint,
+            editorFingerprint: fingerprint(updatedEditorText),
+            armedAt: Date.now(),
+          };
+    return true;
   }
 
   handleInput(data: string): void {
-    if (matchesKey(data, EXPANDED_PASTE_KEY)) {
-      this.handleExpandedClipboardPaste();
-      return;
-    }
+    // ponytail: this editor already owns paste input, so no second extension or listener.
+    if (this.handleDoublePaste(data)) return;
 
     if (PICKER_TRIGGER_CHARS.has(data)) {
       this.handlePickerTrigger(data);
