@@ -241,7 +241,7 @@ if.app-id = 'com.tinyspeck.slackmacgap'
 run = 'move-node-to-workspace Q'
 
 [[on-window-detected]]
-if.app-id = 'com.mitchellh.ghostty'
+if.app-id = 'net.kovidgoyal.kitty'
 run = 'move-node-to-workspace W'
 
 [[on-window-detected]]

@@ -16,6 +16,31 @@
 -- { "<leader>dt", function() require("dap").terminate() end, desc = "Terminate" },
 -- { "<leader>dw", function() require("dap.ui.widgets").hover() end, desc = "Widgets" },
 
+local DEFAULT_DJANGO_PORT = "7777"
+
+local function get_django_api_port()
+  local env_path = vim.fs.joinpath(vim.fn.getcwd(), ".env")
+  local env_file = io.open(env_path, "r")
+  if not env_file then
+    return DEFAULT_DJANGO_PORT
+  end
+
+  local api_port
+
+  for line in env_file:lines() do
+    local key, port = line:match([[^%s*([%u_]+)%s*=%s*["']?(%d+)["']?%s*$]])
+    if key == "WORKTRUNK_API_PORT" then
+      env_file:close()
+      return port
+    elseif key == "API_PORT" then
+      api_port = port
+    end
+  end
+
+  env_file:close()
+  return api_port or DEFAULT_DJANGO_PORT
+end
+
 return {
   "mfussenegger/nvim-dap-python",
     -- stylua: ignore
@@ -42,17 +67,25 @@ return {
     table.insert(require("dap").configurations.python, 1, {
       type = "python",
       request = "launch",
-      name = "django",
+      name = "Django (workspace)",
       program = "${workspaceFolder}/manage.py",
-      args = {
-        "runserver",
-        "7777",
-        "--settings=server.settings.local",
-        "--noreload",
-        "--skip-checks",
-      },
+      cwd = "${workspaceFolder}",
+      pythonPath = function()
+        return vim.fs.joinpath(vim.fn.getcwd(), ".venv", "bin", "python")
+      end,
+      envFile = "${workspaceFolder}/.env",
+      args = function()
+        return {
+          "runserver",
+          "0.0.0.0:" .. get_django_api_port(),
+          "--settings=server.settings.local",
+          "--noreload",
+          "--skip-checks",
+        }
+      end,
+      django = true,
+      justMyCode = true,
       console = "integratedTerminal",
-      -- ... more options, see https://github.com/microsoft/debugpy/wiki/Debug-configuration-settings
     })
   end,
 }
