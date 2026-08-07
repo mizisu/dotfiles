@@ -5,6 +5,7 @@ const STATE_ENTRY = "goal-state";
 const CONTINUATION_DELAY_MS = 800;
 const CONTINUATION_RETRY_DELAY_MS = 1200;
 const MAX_CONTINUATION_TURNS = 25;
+const MAX_ERROR_RECOVERY_TURNS = 3;
 const MAX_OBJECTIVE_STATUS_LENGTH = 56;
 
 const CLEAR_COMMANDS = new Set(["clear", "drop"]);
@@ -222,6 +223,8 @@ export default function goalExtension(pi: ExtensionAPI) {
   let continuationQueued = false;
   let continuationTurn = false;
   let continuationStreak = 0;
+  let pendingSettledError: string | undefined;
+  let errorRecoveryTurns = 0;
   let suppressContinuation = false;
   let sessionGeneration = 0;
 
@@ -261,6 +264,11 @@ export default function goalExtension(pi: ExtensionAPI) {
     continuationTimer = undefined;
   }
 
+  function resetErrorRecovery(): void {
+    pendingSettledError = undefined;
+    errorRecoveryTurns = 0;
+  }
+
   function restoreState(ctx: ExtensionContext): void {
     goal = null;
     for (const entry of ctx.sessionManager.getBranch()) {
@@ -274,6 +282,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 
   function saveGoal(next: GoalState | null): void {
     goal = next ? cloneGoal(next) : null;
+    if (!activeGoal()) resetErrorRecovery();
     setGoalToolActive(Boolean(activeGoal()));
     updateStatus();
     persist();
@@ -378,6 +387,7 @@ export default function goalExtension(pi: ExtensionAPI) {
     saveGoal(newGoal(trimmed));
     suppressContinuation = false;
     continuationStreak = 0;
+    resetErrorRecovery();
     clearContinuationTimer();
     ctx.ui.notify("Goal started", "info");
 
@@ -409,6 +419,7 @@ export default function goalExtension(pi: ExtensionAPI) {
     saveGoal({ ...current, objective: edited, status: "active", updatedAt: Date.now(), note: undefined, evidence: undefined });
     suppressContinuation = false;
     continuationStreak = 0;
+    resetErrorRecovery();
     ctx.ui.notify("Goal updated", "info");
     if (ctx.isIdle()) scheduleContinuation(ctx, 0);
   }
@@ -509,6 +520,7 @@ export default function goalExtension(pi: ExtensionAPI) {
           const resumed = updateGoalStatus("active");
           suppressContinuation = false;
           continuationStreak = 0;
+          resetErrorRecovery();
           sendGoalMessage("goal-status", `Goal resumed.\n\n${goalDetails(resumed)}`);
           if (ctx.isIdle()) scheduleContinuation(ctx, 0);
           return;
@@ -542,6 +554,7 @@ export default function goalExtension(pi: ExtensionAPI) {
     continuationStreak = 0;
     suppressContinuation = false;
     turnHadToolCalls = false;
+    resetErrorRecovery();
     clearContinuationTimer();
     restoreState(ctx);
     if (event.reason === "fork") clearGoalForBranchChange();
@@ -577,6 +590,7 @@ export default function goalExtension(pi: ExtensionAPI) {
     if (event.message.role === "user") {
       suppressContinuation = false;
       continuationStreak = 0;
+      resetErrorRecovery();
     }
   });
 
@@ -595,9 +609,14 @@ export default function goalExtension(pi: ExtensionAPI) {
 
   pi.on("agent_end", (event, ctx) => {
     const current = activeGoal();
-    if (!current) return;
+    if (!current) {
+      resetErrorRecovery();
+      return;
+    }
 
-    if (lastAssistantError(event.messages)) return;
+    pendingSettledError = lastAssistantError(event.messages);
+    if (pendingSettledError) return;
+    errorRecoveryTurns = 0;
 
     if (continuationTurn && !turnHadToolCalls) {
       suppressContinuation = true;
@@ -611,5 +630,29 @@ export default function goalExtension(pi: ExtensionAPI) {
     }
 
     queueContinuation(ctx);
+  });
+
+  pi.on("agent_settled", (_event, ctx) => {
+    const error = pendingSettledError;
+    pendingSettledError = undefined;
+    if (!error || !activeGoal() || suppressContinuation) return;
+
+    if (errorRecoveryTurns >= MAX_ERROR_RECOVERY_TURNS) {
+      const paused = updateGoalStatus(
+        "paused",
+        `Auto-continuation paused after ${MAX_ERROR_RECOVERY_TURNS} provider-error recovery turns.`,
+      );
+      sendGoalMessage("goal-status", `Goal auto-continuation paused.\n\n${goalDetails(paused)}`);
+      ctx.ui.notify("Goal auto-continuation paused after repeated provider errors. Use /goal resume to continue.", "warning");
+      return;
+    }
+
+    errorRecoveryTurns += 1;
+    const delayMs = CONTINUATION_RETRY_DELAY_MS * 2 ** (errorRecoveryTurns - 1);
+    ctx.ui.notify(
+      `Goal retrying after provider error (${errorRecoveryTurns}/${MAX_ERROR_RECOVERY_TURNS}).`,
+      "warning",
+    );
+    scheduleContinuation(ctx, delayMs);
   });
 }

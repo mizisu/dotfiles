@@ -29,7 +29,7 @@
 
 - Be concise.
 - Show file paths clearly when working with files.
-- Mermaid diagrams: use English labels and one plain ` ```mermaid ` fence.
+- Mermaid diagrams: use English labels
 
 # GitHub
 

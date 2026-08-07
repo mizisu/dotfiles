@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "0.80.7",
+  "lastChangelogVersion": "0.84.0",
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.6-sol",
   "mediumProvider": "openai-codex",
@@ -18,16 +18,23 @@
   "hideThinkingBlock": false,
   "terminal": {
     "showImages": true,
-    "clearOnShrink": false
+    "clearOnShrink": false,
+    "showTerminalProgress": false
   },
   "showHardwareCursor": true,
   "doubleEscapeAction": "tree",
   "packages": [
-    "https://github.com/davebcn87/pi-autoresearch"
+    "https://github.com/davebcn87/pi-autoresearch",
+    "npm:pi-web-access"
   ],
   "compaction": {
     "enabled": true
   },
   "quietStartup": true,
-  "enableInstallTelemetry": false
+  "enableInstallTelemetry": false,
+  "markdown": {
+    "mermaid": "streaming"
+  },
+  "tuiMode": "fullscreen",
+  "fullscreenScrollbar": "auto"
 }
