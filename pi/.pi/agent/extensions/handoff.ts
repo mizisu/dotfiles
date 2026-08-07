@@ -1,4 +1,4 @@
-import { complete, type Message } from "@mariozechner/pi-ai";
+import { type Message, uuidv7 } from "@mariozechner/pi-ai";
 import { BorderedLoader, convertToLlm, DynamicBorder, getAgentDir, serializeConversation, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Input, Key, SelectList, fuzzyFilter, matchesKey, truncateToWidth, type Component, type Focusable, type SelectItem } from "@mariozechner/pi-tui";
 import { spawn } from "node:child_process";
@@ -650,9 +650,6 @@ export default function handoffExtension(pi: ExtensionAPI) {
         loader.onAbort = () => done(null);
 
         const generate = async () => {
-          const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model!);
-          if (!auth.ok || !auth.apiKey) throw new Error(auth.ok ? `No API key for ${ctx.model!.provider}` : auth.error);
-
           const userMessage: Message = {
             role: "user",
             content: [{
@@ -668,10 +665,10 @@ export default function handoffExtension(pi: ExtensionAPI) {
             timestamp: Date.now(),
           } as Message;
 
-          const response = await complete(
+          const response = await ctx.modelRegistry.complete(
             ctx.model!,
             { systemPrompt: SYSTEM_PROMPT, messages: [userMessage] },
-            { apiKey: auth.apiKey, headers: auth.headers, signal: loader.signal },
+            { cacheRetention: "none", sessionId: uuidv7(), signal: loader.signal },
           );
 
           if (response.stopReason === "aborted") return null;

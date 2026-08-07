@@ -1,4 +1,4 @@
-import { complete, type Message } from "@mariozechner/pi-ai";
+import { type Message, uuidv7 } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { DynamicBorder } from "@mariozechner/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
@@ -168,20 +168,16 @@ export default function btwExtension(pi: ExtensionAPI) {
     updateWidget();
 
     try {
-      const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
-      if (!auth.ok) throw new Error(auth.error);
-      if (!auth.apiKey) throw new Error(`No API key for ${ctx.model.provider}`);
-
       const messages: Message[] = [{
         role: "user",
         content: [{ type: "text", text: makePrompt(thread) }],
         timestamp: Date.now(),
       } as Message];
 
-      const response = await complete(
+      const response = await ctx.modelRegistry.complete(
         ctx.model,
         { systemPrompt: SYSTEM_PROMPT, messages },
-        { apiKey: auth.apiKey, headers: auth.headers, signal: thread.abort.signal },
+        { cacheRetention: "none", sessionId: uuidv7(), signal: thread.abort.signal },
       );
 
       if (response.stopReason === "aborted" || thread.abort.signal.aborted) {

@@ -3,16 +3,16 @@ import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { matchesKey } from "@mariozechner/pi-tui";
 
-const SIDE_TOOLS = "read,grep,find,ls,web_fetch,web_search";
+const SIDE_TOOLS = "read,grep,find,ls";
 const SIDE_TOOL_NAMES = new Set(SIDE_TOOLS.split(","));
 const SIDE_EXTENSION = fileURLToPath(import.meta.url);
-const WEB_EXTENSION = join(dirname(SIDE_EXTENSION), "web-fetch-search.ts");
 const IS_CHILD = process.env.PI_SIDE_CHILD === "1";
+const SIDE_SHORTCUT = "ctrl+s";
 const TMUX_TIMEOUT_MS = 2_000;
 
 type SideHost = {
@@ -181,8 +181,6 @@ function createSide(
     "--no-extensions",
     "-e",
     SIDE_EXTENSION,
-    "-e",
-    WEB_EXTENSION,
     "--tools",
     SIDE_TOOLS,
     "--name",
@@ -319,7 +317,7 @@ function cleanHost(host: SideHost): void {
 export default function sideExtension(pi: ExtensionAPI) {
   const childHost = IS_CHILD ? readChildHost() : undefined;
   let host: SideHost | undefined;
-  let unsubscribeTilde: (() => void) | undefined;
+  let unsubscribeSideShortcut: (() => void) | undefined;
 
   function ensureHost(ctx: ExtensionContext): SideHost {
     if (host && tryTmux(["has-session", "-t", host.homeSession], sideServer(host)) !== undefined) return host;
@@ -420,13 +418,13 @@ export default function sideExtension(pi: ExtensionAPI) {
   }
 
   pi.on("session_start", (_event, ctx) => {
-    unsubscribeTilde?.();
-    unsubscribeTilde = undefined;
+    unsubscribeSideShortcut?.();
+    unsubscribeSideShortcut = undefined;
     if (ctx.mode !== "tui") return;
 
     if (IS_CHILD) ctx.ui.setStatus("side", `side #${process.env.PI_SIDE_ID ?? "?"}`);
-    unsubscribeTilde = ctx.ui.onTerminalInput((data) => {
-      if (!matchesKey(data, "~")) return undefined;
+    unsubscribeSideShortcut = ctx.ui.onTerminalInput((data) => {
+      if (!matchesKey(data, SIDE_SHORTCUT)) return undefined;
       if (IS_CHILD) useHost(ctx, closePopup);
       else showPopup(ctx);
       return { consume: true };
@@ -434,8 +432,8 @@ export default function sideExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
-    unsubscribeTilde?.();
-    unsubscribeTilde = undefined;
+    unsubscribeSideShortcut?.();
+    unsubscribeSideShortcut = undefined;
     if (IS_CHILD) ctx.ui.setStatus("side", undefined);
     else if (host) {
       cleanHost(host);

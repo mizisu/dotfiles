@@ -1,4 +1,4 @@
-import { complete, type UserMessage } from "@mariozechner/pi-ai";
+import { type UserMessage, uuidv7 } from "@mariozechner/pi-ai";
 import {
   getAgentDir,
   SettingsManager,
@@ -177,9 +177,6 @@ async function generateTitle(ctx: ExtensionContext, firstUserMessage: string, si
   const model = ctx.modelRegistry.find(smallModel.provider, smallModel.modelId);
   if (!model) return undefined;
 
-  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-  if (!auth.ok) return undefined;
-
   const message: UserMessage = {
     role: "user",
     content: [
@@ -191,17 +188,16 @@ async function generateTitle(ctx: ExtensionContext, firstUserMessage: string, si
     timestamp: Date.now(),
   };
 
-  const response = await complete(
+  const response = await ctx.modelRegistry.complete(
     model,
     {
       systemPrompt: TITLE_SYSTEM_PROMPT,
       messages: [message],
     },
     {
-      apiKey: auth.apiKey,
-      headers: auth.headers,
       maxTokens: 64,
       cacheRetention: "none",
+      sessionId: uuidv7(),
       signal,
     },
   );

@@ -2,7 +2,6 @@ import { SettingsManager } from "@mariozechner/pi-coding-agent";
 
 export interface ResolvedModelSlot {
   model: any;
-  auth: { apiKey?: string; headers?: Record<string, string>; env?: Record<string, string> };
   reference: string;
 }
 
@@ -25,10 +24,7 @@ async function resolveModelSlot(ctx: any, providerKey: string, modelKey: string,
   const model = ctx.modelRegistry.find(provider, modelId);
   if (!model) throw new Error(`Configured ${label} model not found: ${reference}`);
 
-  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-  if (!auth.ok) throw new Error(`Auth error for ${label} model ${reference}: ${auth.error}`);
-
-  return { model, auth, reference };
+  return { model, reference };
 }
 
 export function resolveSmallModel(ctx: any): Promise<ResolvedModelSlot> {

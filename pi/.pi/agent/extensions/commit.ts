@@ -1,4 +1,4 @@
-import { complete, type Message } from "@mariozechner/pi-ai";
+import { type Message, uuidv7 } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Box, Text } from "@mariozechner/pi-tui";
 import { open, stat, unlink, writeFile } from "node:fs/promises";
@@ -762,10 +762,10 @@ async function createPlan(ctx: any, input: string): Promise<{ text: string; mode
     timestamp: Date.now(),
   } as Message];
 
-  const response = await complete(
+  const response = await ctx.modelRegistry.complete(
     resolved.model,
     { systemPrompt: PLAN_SYSTEM_PROMPT, messages },
-    { apiKey: resolved.auth.apiKey, headers: resolved.auth.headers },
+    { cacheRetention: "none", sessionId: uuidv7() },
   );
 
   if (response.stopReason === "error") throw new Error(response.errorMessage ?? "model error");

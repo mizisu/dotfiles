@@ -1,4 +1,8 @@
 {
-  "tui.editor.cursorLineEnd": ["end"],
+  "tui.editor.cursorLineEnd": ["end", "ctrl+end"],
+  "tui.altScreen.pageUp": ["pageUp", "ctrl+up"],
+  "tui.altScreen.pageDown": ["pageDown", "ctrl+down"],
+  "tui.altScreen.top": "ctrl+shift+home",
+  "tui.altScreen.bottom": "ctrl+shift+end",
   "app.editor.external": []
 }
