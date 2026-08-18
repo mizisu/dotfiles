@@ -29,7 +29,7 @@ Return ONLY valid JSON, no markdown fences:
 {
   "commits": [
     {
-      "subject": "type(scope): short imperative summary",
+      "subject": "type: short imperative summary",
       "description": "optional why/context, or empty string",
       "files": {
         "path/file.ts": "all",
@@ -41,9 +41,10 @@ Return ONLY valid JSON, no markdown fences:
 
 Rules:
 - Group changes by PURPOSE and dependency, not by file extension.
-- Use Conventional Commits: feat, fix, refactor, chore, docs, style, test, perf, ci, build.
-- Match "Author commit style examples" when provided: language, scope granularity, and description usage.
-- Still keep the subject in Conventional Commit form; do not copy merge, PR, issue-number suffixes, or co-author trailers from examples.
+- Use unscoped Conventional Commits: feat, fix, refactor, chore, docs, style, test, perf, ci, build.
+- Never add a scope: use "feat: summary", not "feat(some-feature): summary".
+- Match "Author commit style examples" when provided: language and description usage, but ignore scopes in examples.
+- Still keep the subject in unscoped Conventional Commit form; do not copy merge, PR, issue-number suffixes, or co-author trailers from examples.
 - Leave description empty for simple commits; when used, explain why/context/details without repeating the subject.
 - Do not include issue tracker tags.
 - Every commit must be independently buildable/runnable.
@@ -343,9 +344,13 @@ async function readUntrackedPreviews(root: string, files: string[]): Promise<Unt
 function normalizeSubject(subject: unknown): string {
   const raw = String(subject ?? "").replace(/\s+/g, " ").trim();
   const oneLine = raw || "chore: update changes";
-  const conventional = /^(feat|fix|refactor|chore|docs|style|test|perf|ci|build)(\([^)]+\))?:\s+.+/i.test(oneLine)
-    ? oneLine
-    : `chore: ${oneLine.replace(/^(chore:\s*)?/i, "")}`;
+  const withoutScope = oneLine.replace(
+    /^(feat|fix|refactor|chore|docs|style|test|perf|ci|build)\([^)]+\):\s*/i,
+    "$1: ",
+  );
+  const conventional = /^(feat|fix|refactor|chore|docs|style|test|perf|ci|build):\s+.+/i.test(withoutScope)
+    ? withoutScope
+    : `chore: ${withoutScope.replace(/^(chore:\s*)?/i, "")}`;
   return conventional.length <= MAX_SUBJECT_LENGTH ? conventional : conventional.slice(0, MAX_SUBJECT_LENGTH - 1).trimEnd() + "…";
 }
 

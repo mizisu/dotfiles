@@ -10,7 +10,7 @@
 # Python
 
 - For Python-related work (package management, running scripts, tests, tools, or one-off commands), always use `uv`.
-- Avoid redundant keyword arguments like `a=a`; use them only when kwargs are required or they materially improve clarity beyond the passed variable name.
+- Positional arguments are fine when parameter names are clear; kwargs are not required.
 - Do not use the `__all__` pattern unless explicitly instructed.
 - `__pycache__` directories generated during Python work do not need to be removed.
 

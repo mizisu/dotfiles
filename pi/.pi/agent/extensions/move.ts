@@ -109,11 +109,9 @@ export default function moveExtension(pi: ExtensionAPI) {
           notify(ctx, "Usage: /move <path>", "error");
           return;
         }
-        const prompted = await ctx.ui.input("Move session", "Target directory path");
-        input = stripOuterQuotes(prompted ?? "");
+        ctx.ui.setEditorText("/move ");
+        return;
       }
-
-      if (!input) return;
 
       const oldCwd = ctx.sessionManager.getCwd();
       const targetCwd = resolveTargetPath(input, oldCwd);
