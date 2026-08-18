@@ -1,7 +1,7 @@
 git:
-  pagers:
+  diffRenderers:
     - colorArg: always
-      pager: delta --features=catppuccin-macchiato --paging=never --24-bit-color=always
+      command: delta --features=catppuccin-macchiato --paging=never --24-bit-color=always
 gui:
   theme:
     activeBorderColor:
