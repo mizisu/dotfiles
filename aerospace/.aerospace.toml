@@ -207,6 +207,7 @@ on-mode-changed = []
     alt-shift-semicolon = 'mode service'
 
     alt-m = 'fullscreen'
+    alt-b = 'exec-and-forget $HOME/.config/sketchybar/plugins/toggle_bar.sh'
 
 
 # 'service' binding mode declaration.
