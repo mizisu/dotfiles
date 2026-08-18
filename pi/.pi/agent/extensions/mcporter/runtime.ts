@@ -9,6 +9,7 @@ import {
   type RuntimeLogger,
   type ServerDefinition,
 } from "mcporter";
+import { clearOAuthCaches } from "./node_modules/mcporter/dist/oauth-persistence.js";
 import {
   emptyCache,
   getCachedTools,
@@ -278,8 +279,8 @@ export class McpRuntimeManager {
       const runtime = await this.ensureRuntime(ctx);
       const tools = await runtime.listTools(serverName, {
         includeSchema: true,
-        autoAuthorize: false,
         allowCachedAuth: true,
+        disableOAuth: true,
       });
       return updateCachedTools(this.cachePath, cache, serverName, tools);
     } catch (error) {
@@ -328,12 +329,13 @@ export class McpRuntimeManager {
     return { refreshed, failed };
   }
 
-  async authorizeServer(serverName: string, ctx?: ContextLike): Promise<CachedToolInfo[]> {
+  async authorizeServer(serverName: string, ctx?: ContextLike, reset = false): Promise<CachedToolInfo[]> {
     const cache = await this.getCache();
 
     try {
       const runtime = await this.ensureRuntime(ctx);
       await runtime.close(serverName).catch(() => {});
+      if (reset) await clearOAuthCaches(runtime.getDefinition(serverName));
       const tools = await runtime.listTools(serverName, {
         includeSchema: true,
         autoAuthorize: true,
@@ -375,7 +377,13 @@ export class McpRuntimeManager {
   async callTool(selector: ResolvedToolSelector, args: Record<string, unknown>, ctx?: ContextLike): Promise<unknown> {
     try {
       const runtime = await this.ensureRuntime(ctx);
-      return await runtime.callTool(selector.serverName, selector.toolName, { args });
+      // OAuth is initiated explicitly through /mcp auth. Tool calls must only
+      // reuse cached credentials so an SDK-triggered browser flow cannot be
+      // torn down as an unhandled deferred rejection inside mcporter.
+      return await runtime.callTool(selector.serverName, selector.toolName, {
+        args,
+        disableOAuth: true,
+      });
     } catch (error) {
       const issue = describeConnectionIssue(error);
       const message = sanitizeError(error);
