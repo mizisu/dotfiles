@@ -11,3 +11,7 @@ trust.json
 
 agent/extensions/learnable/
 
+.pi/subagents/
+agent/missions/
+agent/run-history.jsonl
+agent/models-store.json

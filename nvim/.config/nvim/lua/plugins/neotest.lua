@@ -82,29 +82,10 @@ return {
     },
     config = function()
       require("neotest").setup({
-        run = {
-          augment = function(tree, args)
-            args.env = args.env or {}
-            args.env.DJANGO_SETTINGS_MODULE = "server.settings.test"
-            args.env.DEBUG = "True"
-
-            if type(args[1]) == "string" and not args[1]:find("%.py") then
-              -- 출력을 단순하게 만들기 위해
-              -- 특정 파일이 아니라 전체 실행의 경우에는 VIEW_TRACEBACK을 False로 실행
-              args.env.VIEW_TRACEBACK = "False"
-            end
-
-            return args
-          end,
-        },
         adapters = {
           require("neotest-python")({
             dap = {
               justMyCode = false,
-            },
-            runner = "django",
-            args = {
-              "--keepdb", -- 테스트 데이터베이스 재사용
             },
           }),
           require("neotest-plenary"),

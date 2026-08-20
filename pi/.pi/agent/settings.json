@@ -25,7 +25,8 @@
   "doubleEscapeAction": "tree",
   "packages": [
     "https://github.com/davebcn87/pi-autoresearch",
-    "npm:pi-web-access"
+    "npm:pi-web-access",
+    "npm:pi-subagents"
   ],
   "compaction": {
     "enabled": true
