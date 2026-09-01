@@ -204,12 +204,16 @@ function paddedCwdLine(
   return paddedLine(theme.fg("dim", plainCwd), width);
 }
 
-function renderModel(pi: ExtensionAPI, ctx: ExtensionContext): string {
-  const modelName = ctx.model?.id ?? "no-model";
-  if (!ctx.model?.reasoning) return modelName;
+function renderModel(pi: ExtensionAPI, ctx: ExtensionContext, fastModeEnabled: boolean): string {
+  const parts = [ctx.model?.id ?? "no-model"];
 
-  const thinkingLevel = pi.getThinkingLevel();
-  return thinkingLevel === "off" ? `${modelName} • thinking off` : `${modelName} • ${thinkingLevel}`;
+  if (ctx.model?.reasoning) {
+    const thinkingLevel = pi.getThinkingLevel();
+    parts.push(thinkingLevel === "off" ? "thinking off" : thinkingLevel);
+  }
+  if (fastModeEnabled) parts.push("fast");
+
+  return parts.join(" • ");
 }
 
 function footerContentWidth(width: number): number {
@@ -294,7 +298,8 @@ function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
 
         const branch = footerData.getGitBranch();
         const contextLine = renderContextUsage(theme, ctx);
-        const modelLine = theme.fg("dim", renderModel(pi, ctx));
+        const fastModeEnabled = footerData.getExtensionStatuses?.().has("fast") ?? false;
+        const modelLine = theme.fg("dim", renderModel(pi, ctx, fastModeEnabled));
 
         lines.push(paddedCwdLine(theme, ctx, branch, diffStats, width));
         lines.push(paddedLeftRight(contextLine, modelLine, width));

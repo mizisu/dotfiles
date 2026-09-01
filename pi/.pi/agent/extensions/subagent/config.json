@@ -1,0 +1,11 @@
+{
+  "asyncByDefault": false,
+  "artifactDir": "temp",
+  "artifactConfig": {
+    "cleanupDays": 1
+  },
+  "missions": {
+    "enabled": false,
+    "globalIndex": false
+  }
+}

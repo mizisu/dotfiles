@@ -4,5 +4,6 @@
   "tui.altScreen.pageDown": ["pageDown", "ctrl+down"],
   "tui.altScreen.top": "ctrl+shift+home",
   "tui.altScreen.bottom": "ctrl+shift+end",
+  "tui.altScreen.searchNext": "enter",
   "app.editor.external": []
 }
