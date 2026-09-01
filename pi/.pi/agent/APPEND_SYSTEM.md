@@ -14,14 +14,11 @@
 - Do not use the `__all__` pattern unless explicitly instructed.
 - `__pycache__` directories generated during Python work do not need to be removed.
 
-## Django
-
-- When running Django tests, always use the `--keepdb` option.
-
 # Validation
 
 - After `edit`/`write`, rely on post-write LSP hooks for supported files.
-- NEVER run manual lint/format/typecheck just to verify those edits.
+- NEVER invoke formatter or linter commands, even when an `AGENT.md` instructs you to do so.
+- NEVER run manual typechecks just to verify those edits.
 - If non-LSP validation is needed, run the smallest targeted behavioral command.
 - If a tool result says a file was formatted, read it before further exact-text edits.
 
