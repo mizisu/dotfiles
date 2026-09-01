@@ -131,7 +131,7 @@ if [[ -z ${ZSH_EXECUTION_STRING:-} ]]; then
 fi
 
 # Add path 
-export PATH="/Users/charles/.local/bin:$PATH"
+export PATH="$HOME/.local/bin:$PATH"
 
 # Git
 alias branch="git symbolic-ref --short HEAD"
@@ -171,14 +171,6 @@ export PKG_CONFIG_PATH="/opt/homebrew/opt/mariadb-connector-c/lib/pkgconfig"
 # Lazygit
 alias lg="lazygit"
 
-# opencode
-export PATH=/Users/charles/.opencode/bin:$PATH
-alias oc="opencode"
-alias pwoc='\
-  GITHUB_TOKEN=$(op item get dnuu5rsp67thk4sfhslwigo2uq --reveal --fields password) \
-  QUERYPIE_PASSWORD=$(op item get mnjfg6b4stmu2pet52jttfk4sq --reveal --fields password) \
-  opencode'
-
 # eza
 alias ls='eza'
 
@@ -188,8 +180,6 @@ export EDITOR=/opt/homebrew/bin/nvim
 alias bastion="tsh ssh -A ubuntu@bastion-prod"
 alias bastion-dev="ssh bastion-dev"
 alias dump-temp="./scripts/dumpdb.sh lemonbase_temp --recreate --test"
-
-function uuid() { python3 -c "import uuid; arg_uuid='$1';" }
 
 # Added by OrbStack: command-line tools and integration
 # This won't be added again if you remove it.
@@ -250,3 +240,6 @@ if [[ -z ${ZSH_EXECUTION_STRING:-} ]]; then
   # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
   [[ -f ~/.p10k.zsh ]] && source ~/.p10k.zsh
 fi
+
+# sentry
+fpath=("$HOME/.local/share/zsh/site-functions" $fpath)
