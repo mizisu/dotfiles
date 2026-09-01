@@ -77,7 +77,7 @@ return {
       args = function()
         return {
           "runserver",
-          "0.0.0.0:" .. get_django_api_port(),
+          "127.0.0.1:" .. get_django_api_port(),
           "--settings=server.settings.local",
           "--noreload",
           "--skip-checks",
