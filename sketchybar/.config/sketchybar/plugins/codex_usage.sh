@@ -47,7 +47,7 @@ fetch_usage() {
     printf '%s\n' '{"method":"account/rateLimits/read","id":2,"params":{}}'
     sleep 4
   } | /usr/bin/perl -e '$timeout = shift; alarm $timeout; exec @ARGV' \
-        8 "$codex_bin" -s read-only -a untrusted app-server 2>/dev/null \
+        8 "$codex_bin" -s read-only -a never app-server 2>/dev/null \
       | jq -c 'select(.id == 2 and .result.rateLimits) | .result' 2>/dev/null \
       | tail -n 1
 }

@@ -3,17 +3,18 @@
 # Calendar click handler
 # Opens Zoom link if available, otherwise opens Google Calendar
 
-CACHE_FILE="$HOME/.cache/sketchybar/calendar_zoom_link"
+CACHE_DIR="$HOME/.cache/sketchybar"
+CACHE_FILE="$CACHE_DIR/calendar_zoom_link"
 
 ZOOM_LINK=""
-if [ -f "$CACHE_FILE" ]; then
-  ZOOM_LINK=$(cat "$CACHE_FILE")
+if [ -d "$CACHE_DIR" ] && [ ! -L "$CACHE_DIR" ] && [ -O "$CACHE_DIR" ] \
+  && [ -f "$CACHE_FILE" ] && [ ! -L "$CACHE_FILE" ] && [ -O "$CACHE_FILE" ]; then
+  IFS= read -r ZOOM_LINK < "$CACHE_FILE"
 fi
 
-if [ -n "$ZOOM_LINK" ]; then
-  # Open Zoom link
-  open "$ZOOM_LINK"
+if [[ "$ZOOM_LINK" =~ ^https://([a-zA-Z0-9-]+\.)*zoom\.(us|com)/j/[0-9]+([/?#][^[:space:]]*)?$ ]]; then
+  # Open only a validated HTTPS Zoom meeting URL.
+  /usr/bin/open "$ZOOM_LINK"
 else
-  # Open Google Calendar
-  open "https://calendar.google.com"
+  /usr/bin/open "https://calendar.google.com"
 fi

@@ -1,4 +1,5 @@
 #!/bin/bash
+umask 077
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
 
@@ -10,7 +11,28 @@ export LC_ALL=en_US.UTF-8
 
 CACHE_DIR="$HOME/.cache/sketchybar"
 CACHE_FILE="$CACHE_DIR/calendar_zoom_link"
-mkdir -p "$CACHE_DIR"
+if [ -L "$CACHE_DIR" ]; then
+  echo "Refusing symlinked cache directory: $CACHE_DIR" >&2
+  exit 1
+fi
+mkdir -p "$CACHE_DIR" || exit 1
+if [ ! -O "$CACHE_DIR" ]; then
+  echo "Refusing cache directory not owned by the current user: $CACHE_DIR" >&2
+  exit 1
+fi
+chmod 700 "$CACHE_DIR" || exit 1
+
+write_zoom_cache() {
+  local value="$1"
+  local temporary
+  temporary=$(mktemp "$CACHE_DIR/.calendar_zoom_link.XXXXXX") || return 1
+  if ! printf '%s\n' "$value" > "$temporary"; then
+    rm -f "$temporary"
+    return 1
+  fi
+  chmod 600 "$temporary" || { rm -f "$temporary"; return 1; }
+  mv -f "$temporary" "$CACHE_FILE"
+}
 
 NOW_EPOCH=$(date "+%s")
 
@@ -20,7 +42,7 @@ EVENTS=$(icalBuddy -nc -ic "Charles" -ea -df "%Y-%m-%d" -tf "%H:%M" -iep "title,
 
 if [ -z "$EVENTS" ]; then
   sketchybar --set $NAME icon="󰃰" label=""
-  echo "" > "$CACHE_FILE"
+  write_zoom_cache ""
   exit 0
 fi
 
@@ -152,7 +174,7 @@ fi
 
 if [ -z "$FOUND_TITLE" ]; then
   sketchybar --set $NAME icon="󰃰" label=""
-  echo "" > "$CACHE_FILE"
+  write_zoom_cache ""
   exit 0
 fi
 
@@ -180,7 +202,7 @@ ZOOM_LINK=$(echo "$FULL_EVENTS" | awk -v title="$FOUND_TITLE" -v start_time="$FO
   }
 ' | grep -oE 'https://[a-zA-Z0-9.-]*zoom\.(us|com)/j/[0-9]+[^ ]*' | head -1)
 
-echo "$ZOOM_LINK" > "$CACHE_FILE"
+write_zoom_cache "$ZOOM_LINK"
 
 # Truncate title (max 10 chars)
 DISPLAY_TITLE="${FOUND_TITLE:0:10}"
