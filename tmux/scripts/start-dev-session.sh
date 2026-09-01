@@ -2,6 +2,8 @@
 set -euo pipefail
 
 cwd="${1:?current path required}"
+[[ -d "$cwd" ]] || { printf 'Invalid working directory: %s\n' "$cwd" >&2; exit 2; }
+
 window_name="dev"
 launch_root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$cwd")"
 
@@ -24,7 +26,7 @@ while tmux has-session -t "$session_name" 2>/dev/null; do
 done
 
 app_dir="$launch_root/app"
-printf -v left_cmd 'cd %q && uv run manage.py runserver 0.0.0.0:7777 --settings=server.settings.local --skip-checks' "$launch_root"
+printf -v left_cmd 'cd %q && uv run manage.py runserver 127.0.0.1:7777 --settings=server.settings.local --skip-checks' "$launch_root"
 printf -v right_cmd 'cd %q && pnpm start' "$app_dir"
 
 left_pane="$(tmux new-session -d -P -F '#{pane_id}' -s "$session_name" -n "$window_name" -c "$launch_root")"
