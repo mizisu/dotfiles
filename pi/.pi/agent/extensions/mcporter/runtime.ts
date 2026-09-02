@@ -1,15 +1,12 @@
-import { access, readFile } from "node:fs/promises";
+import { access, lstat, readFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
-  createRuntime,
   describeConnectionIssue,
-  type Runtime,
-  type RuntimeLogger,
   type ServerDefinition,
 } from "mcporter";
-import { clearOAuthCaches } from "./node_modules/mcporter/dist/oauth-persistence.js";
+import { McpIsolatedRuntime, type IsolatedRuntime } from "./isolated-runtime.js";
 import {
   emptyCache,
   getCachedTools,
@@ -48,14 +45,6 @@ export interface RefreshResult {
 
 const HOME_CONFIG_PATH = join(homedir(), ".mcporter", "mcporter.json");
 const PROJECT_CONFIG_PATH = "config/mcporter.json";
-
-// mcporter's default console logger bypasses pi's TUI and can leave OAuth
-// progress text painted over the editor. The extension reports status via ctx.ui.
-const SILENT_RUNTIME_LOGGER: RuntimeLogger = {
-  info: () => undefined,
-  warn: () => undefined,
-  error: () => undefined,
-};
 
 function sanitizeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -97,13 +86,13 @@ export function configHint(envPath: string): string {
 }
 
 export class McpRuntimeManager {
-  private runtime: Runtime | undefined;
-  private runtimePromise: Promise<Runtime> | undefined;
+  private runtime: IsolatedRuntime | undefined;
+  private runtimePromise: Promise<IsolatedRuntime> | undefined;
+  private runtimeGeneration = 0;
   private cache: ToolCacheFile = emptyCache();
   private cacheLoaded = false;
   private sessionCwd = process.cwd();
-  private originalEnv = new Map<string, string | undefined>();
-  private injectedKeys = new Set<string>();
+  private extensionEnv: Record<string, string> = {};
   private envStatus: EnvStatus;
   private lastError: string | undefined;
 
@@ -135,6 +124,15 @@ export class McpRuntimeManager {
     return this.lastError;
   }
 
+  private sanitizeRuntimeError(error: unknown): string {
+    let message = sanitizeError(error);
+    const secrets = [...new Set(Object.values(this.extensionEnv))]
+      .filter((value) => value.length > 0)
+      .sort((left, right) => right.length - left.length);
+    for (const secret of secrets) message = message.split(secret).join("[REDACTED]");
+    return message;
+  }
+
   async getCache(): Promise<ToolCacheFile> {
     if (!this.cacheLoaded) {
       this.cache = await loadCache(this.cachePath);
@@ -143,7 +141,11 @@ export class McpRuntimeManager {
     return this.cache;
   }
 
-  async loadExtensionEnv(): Promise<EnvStatus> {
+  async loadExtensionEnv(restartRuntime = true): Promise<EnvStatus> {
+    // Recreate isolated runtimes so a reload cannot leave old credentials in a
+    // worker or mix old and new values. Initial runtime creation has nothing to
+    // close and keeps its lifecycle generation stable.
+    if (restartRuntime) await this.close(false);
     await this.unloadExtensionEnv();
 
     const checkedAt = new Date().toISOString();
@@ -161,12 +163,19 @@ export class McpRuntimeManager {
     }
 
     try {
-      const parsed = parseEnvFile(await readFile(this.envStatus.path, "utf8"), this.envStatus.path);
-      for (const [key, value] of Object.entries(parsed)) {
-        if (!this.originalEnv.has(key)) this.originalEnv.set(key, process.env[key]);
-        process.env[key] = value;
-        this.injectedKeys.add(key);
+      const envFile = await lstat(this.envStatus.path);
+      if (!envFile.isFile() || envFile.isSymbolicLink()) {
+        throw new Error(`Refusing non-regular extension env file: ${this.envStatus.path}`);
       }
+      if ((envFile.mode & 0o077) !== 0) {
+        throw new Error(`Extension env file must not be accessible by group or others (run chmod 600 ${this.envStatus.path})`);
+      }
+      if (typeof process.getuid === "function" && envFile.uid !== process.getuid()) {
+        throw new Error(`Extension env file is not owned by the current user: ${this.envStatus.path}`);
+      }
+
+      const parsed = parseEnvFile(await readFile(this.envStatus.path, "utf8"), this.envStatus.path);
+      this.extensionEnv = parsed;
 
       this.envStatus = {
         path: this.envStatus.path,
@@ -194,14 +203,7 @@ export class McpRuntimeManager {
   }
 
   async unloadExtensionEnv(): Promise<void> {
-    for (const key of this.injectedKeys) {
-      const previous = this.originalEnv.get(key);
-      if (previous === undefined) delete process.env[key];
-      else process.env[key] = previous;
-    }
-
-    this.injectedKeys.clear();
-    this.originalEnv.clear();
+    this.extensionEnv = {};
     this.envStatus = {
       path: this.envStatus.path,
       checkedAt: this.envStatus.checkedAt,
@@ -214,12 +216,15 @@ export class McpRuntimeManager {
   async close(unloadEnv = true): Promise<void> {
     const runtime = this.runtime;
     const pending = this.runtimePromise;
+    this.runtimeGeneration += 1;
     this.runtime = undefined;
     this.runtimePromise = undefined;
 
     try {
-      if (runtime) await runtime.close();
-      if (pending) await (await pending).close();
+      const runtimes = new Set<IsolatedRuntime>();
+      if (runtime) runtimes.add(runtime);
+      if (pending) runtimes.add(await pending);
+      await Promise.allSettled([...runtimes].map((instance) => instance.close()));
     } catch {
       // Best-effort cleanup only.
     } finally {
@@ -227,35 +232,42 @@ export class McpRuntimeManager {
     }
   }
 
-  async ensureRuntime(ctx?: ContextLike): Promise<Runtime> {
+  async ensureRuntime(ctx?: ContextLike): Promise<IsolatedRuntime> {
     if (this.runtime) return this.runtime;
     if (this.runtimePromise) return this.runtimePromise;
 
-    if (!this.envStatus.loaded && !this.envStatus.checkedAt) {
-      await this.loadExtensionEnv();
-    }
-
     const rootDir = ctx?.cwd ?? this.sessionCwd;
-    this.runtimePromise = createRuntime({
-      rootDir,
-      logger: SILENT_RUNTIME_LOGGER,
-      clientInfo: {
-        name: "pi-mcporter",
-        version: "0.1.0",
-      },
-    }).then((runtime) => {
+    const generation = ++this.runtimeGeneration;
+    let initialization: Promise<IsolatedRuntime>;
+    initialization = (async () => {
+      await Promise.resolve();
+      if (!this.envStatus.loaded && !this.envStatus.checkedAt) {
+        await this.loadExtensionEnv(false);
+      }
+      if (generation !== this.runtimeGeneration || this.runtimePromise !== initialization) {
+        throw new Error("MCP runtime initialization was superseded.");
+      }
+
+      const runtime = await new McpIsolatedRuntime(rootDir, { ...this.extensionEnv }).initialize();
+      if (generation !== this.runtimeGeneration || this.runtimePromise !== initialization) {
+        await runtime.close();
+        throw new Error("MCP runtime initialization was superseded.");
+      }
       this.runtime = runtime;
       this.runtimePromise = undefined;
       this.lastError = undefined;
       return runtime;
-    }).catch((error) => {
-      const message = sanitizeError(error);
-      this.runtimePromise = undefined;
-      this.lastError = message;
-      throw error;
+    })().catch((error) => {
+      const message = this.sanitizeRuntimeError(error);
+      if (this.runtimePromise === initialization) {
+        this.runtimePromise = undefined;
+        this.lastError = message;
+      }
+      throw new Error(message);
     });
+    this.runtimePromise = initialization;
 
-    return this.runtimePromise;
+    return initialization;
   }
 
   async listServers(ctx?: ContextLike): Promise<string[]> {
@@ -268,7 +280,7 @@ export class McpRuntimeManager {
     return runtime.getDefinitions();
   }
 
-  async listTools(serverName: string, ctx?: ContextLike, refresh = false): Promise<CachedToolInfo[]> {
+  async listTools(serverName: string, ctx?: ContextLike, refresh = false, signal?: AbortSignal): Promise<CachedToolInfo[]> {
     const cache = await this.getCache();
     if (!refresh) {
       const cached = getCachedTools(cache, serverName);
@@ -281,25 +293,26 @@ export class McpRuntimeManager {
         includeSchema: true,
         allowCachedAuth: true,
         disableOAuth: true,
-      });
+      }, signal);
       return updateCachedTools(this.cachePath, cache, serverName, tools);
     } catch (error) {
-      const message = sanitizeError(error);
+      const message = this.sanitizeRuntimeError(error);
       this.lastError = message;
       await updateServerError(this.cachePath, cache, serverName, message).catch(() => {});
-      throw error;
+      throw new Error(message);
     }
   }
 
-  async allTools(ctx?: ContextLike, refresh = false): Promise<McpTool[]> {
+  async allTools(ctx?: ContextLike, refresh = false, signal?: AbortSignal): Promise<McpTool[]> {
     const servers = await this.listServers(ctx);
     const all: McpTool[] = [];
 
     for (const serverName of servers) {
       try {
-        const tools = await this.listTools(serverName, ctx, refresh);
+        const tools = await this.listTools(serverName, ctx, refresh, signal);
         for (const tool of tools) all.push({ serverName, toolName: tool.name, ...tool });
-      } catch {
+      } catch (error) {
+        if (signal?.aborted) throw error;
         // Discovery/search should remain useful when one server is unavailable.
       }
     }
@@ -307,22 +320,23 @@ export class McpRuntimeManager {
     return all;
   }
 
-  async refreshMetadata(target: string | undefined, ctx?: ContextLike): Promise<RefreshResult> {
+  async refreshMetadata(target: string | undefined, ctx?: ContextLike, signal?: AbortSignal): Promise<RefreshResult> {
     const failed: RefreshResult["failed"] = [];
     let refreshed = 0;
 
     if (target) {
-      await this.listTools(target, ctx, true);
+      await this.listTools(target, ctx, true, signal);
       return { refreshed: 1, failed };
     }
 
     const servers = await this.listServers(ctx);
     for (const server of servers) {
       try {
-        await this.listTools(server, ctx, true);
+        await this.listTools(server, ctx, true, signal);
         refreshed += 1;
       } catch (error) {
-        failed.push({ server, error: sanitizeError(error) });
+        if (signal?.aborted) throw error;
+        failed.push({ server, error: this.sanitizeRuntimeError(error) });
       }
     }
 
@@ -335,22 +349,18 @@ export class McpRuntimeManager {
     try {
       const runtime = await this.ensureRuntime(ctx);
       await runtime.close(serverName).catch(() => {});
-      if (reset) await clearOAuthCaches(runtime.getDefinition(serverName));
-      const tools = await runtime.listTools(serverName, {
-        includeSchema: true,
-        autoAuthorize: true,
-      });
+      const tools = await runtime.authorizeServer(serverName, reset);
       this.lastError = undefined;
       return updateCachedTools(this.cachePath, cache, serverName, tools);
     } catch (error) {
-      const message = sanitizeError(error);
+      const message = this.sanitizeRuntimeError(error);
       this.lastError = message;
       await updateServerError(this.cachePath, cache, serverName, message).catch(() => {});
-      throw error;
+      throw new Error(message);
     }
   }
 
-  async resolveToolSelector(selector: string, ctx?: ContextLike, serverHint?: string): Promise<ResolvedToolSelector> {
+  async resolveToolSelector(selector: string, ctx?: ContextLike, serverHint?: string, signal?: AbortSignal): Promise<ResolvedToolSelector> {
     const trimmed = selector.trim();
     if (!trimmed) throw new Error("Tool name is required.");
 
@@ -361,7 +371,7 @@ export class McpRuntimeManager {
 
     if (serverHint) return { serverName: serverHint, toolName: trimmed };
 
-    const allTools = await this.allTools(ctx);
+    const allTools = await this.allTools(ctx, false, signal);
     const exactMatches = allTools.filter((tool) => tool.toolName === trimmed);
     if (exactMatches.length === 1) return { serverName: exactMatches[0].serverName, toolName: exactMatches[0].toolName };
     if (exactMatches.length > 1) throw new Error(`Tool "${trimmed}" exists on multiple servers. Use server.tool form.`);
@@ -374,7 +384,7 @@ export class McpRuntimeManager {
     throw new Error(`Tool "${trimmed}" not found. Start with mcp({ search: "${trimmed}" }).`);
   }
 
-  async callTool(selector: ResolvedToolSelector, args: Record<string, unknown>, ctx?: ContextLike): Promise<unknown> {
+  async callTool(selector: ResolvedToolSelector, args: Record<string, unknown>, ctx?: ContextLike, signal?: AbortSignal): Promise<unknown> {
     try {
       const runtime = await this.ensureRuntime(ctx);
       // OAuth is initiated explicitly through /mcp auth. Tool calls must only
@@ -383,10 +393,10 @@ export class McpRuntimeManager {
       return await runtime.callTool(selector.serverName, selector.toolName, {
         args,
         disableOAuth: true,
-      });
+      }, signal);
     } catch (error) {
       const issue = describeConnectionIssue(error);
-      const message = sanitizeError(error);
+      const message = this.sanitizeRuntimeError(error);
       this.lastError = message;
       throw new Error(`[${issue.kind}] ${message}`);
     }

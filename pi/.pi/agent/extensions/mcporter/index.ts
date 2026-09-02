@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { cacheStats, type CachedToolInfo } from "./cache.js";
 import {
   renderCallResult,
@@ -127,7 +127,7 @@ async function renderStatus(enabled: boolean, ctx?: ExtensionContext): Promise<s
   lines.push(`Folder: ${relativeToCwd(EXTENSION_DIR)}`);
 
   if (env.loaded) {
-    lines.push(`Env: loaded from .env (${env.variableCount} variable${env.variableCount === 1 ? "" : "s"})`);
+    lines.push(`Env: loaded into isolated MCP workers (${env.variableCount} variable${env.variableCount === 1 ? "" : "s"})`);
   } else if (env.exists && env.error) {
     lines.push(`Env: .env failed to load (${env.error})`);
   } else if (env.exists) {
@@ -175,17 +175,17 @@ async function renderServers(ctx: ExtensionContext): Promise<string> {
   return truncateForModel(lines.join("\n"));
 }
 
-async function renderServerTools(serverName: string, ctx: ExtensionContext, refresh = false): Promise<string> {
+async function renderServerTools(serverName: string, ctx: ExtensionContext, refresh = false, signal?: AbortSignal): Promise<string> {
   const servers = await runtime.listServers(ctx);
   if (!servers.includes(serverName)) throw new Error(`Server "${serverName}" not found. ${configHint(join(EXTENSION_DIR, ".env"))}`);
-  return renderToolList(serverName, await runtime.listTools(serverName, ctx, refresh));
+  return renderToolList(serverName, await runtime.listTools(serverName, ctx, refresh, signal));
 }
 
-async function renderSearchResults(query: string, ctx: ExtensionContext): Promise<string> {
+async function renderSearchResults(query: string, ctx: ExtensionContext, signal?: AbortSignal): Promise<string> {
   const trimmed = query.trim();
   if (!trimmed) throw new Error("search query must not be empty.");
 
-  const matches = (await runtime.allTools(ctx))
+  const matches = (await runtime.allTools(ctx, false, signal))
     .map((tool) => ({ tool, score: scoreMatch(tool, trimmed) }))
     .filter((entry) => entry.score > 0)
     .sort((a, b) => b.score - a.score || a.tool.serverName.localeCompare(b.tool.serverName) || a.tool.toolName.localeCompare(b.tool.toolName))
@@ -201,23 +201,23 @@ async function renderSearchResults(query: string, ctx: ExtensionContext): Promis
   return truncateForModel(lines.join("\n"));
 }
 
-async function describeTool(selectorText: string, ctx: ExtensionContext, serverHint?: string): Promise<string> {
-  const selector = await runtime.resolveToolSelector(selectorText, ctx, serverHint);
-  const tools = await runtime.listTools(selector.serverName, ctx);
+async function describeTool(selectorText: string, ctx: ExtensionContext, serverHint?: string, signal?: AbortSignal): Promise<string> {
+  const selector = await runtime.resolveToolSelector(selectorText, ctx, serverHint, signal);
+  const tools = await runtime.listTools(selector.serverName, ctx, false, signal);
   const tool = tools.find((entry: CachedToolInfo) => entry.name === selector.toolName);
   if (!tool) throw new Error(`Tool "${selector.serverName}.${selector.toolName}" not found.`);
   return renderToolDescription(selector, tool);
 }
 
-async function callTool(selectorText: string, args: unknown, ctx: ExtensionContext, serverHint?: string): Promise<string> {
-  const selector: ResolvedToolSelector = await runtime.resolveToolSelector(selectorText, ctx, serverHint);
-  const raw = await runtime.callTool(selector, normalizeArgs(args), ctx);
+async function callTool(selectorText: string, args: unknown, ctx: ExtensionContext, serverHint?: string, signal?: AbortSignal): Promise<string> {
+  const selector: ResolvedToolSelector = await runtime.resolveToolSelector(selectorText, ctx, serverHint, signal);
+  const raw = await runtime.callTool(selector, normalizeArgs(args), ctx, signal);
   return renderCallResult(raw);
 }
 
-async function refreshMetadata(target: string | undefined, ctx: ExtensionContext): Promise<string> {
+async function refreshMetadata(target: string | undefined, ctx: ExtensionContext, signal?: AbortSignal): Promise<string> {
   const normalized = target?.trim();
-  const result = await runtime.refreshMetadata(!normalized || normalized === "*" ? undefined : normalized, ctx);
+  const result = await runtime.refreshMetadata(!normalized || normalized === "*" ? undefined : normalized, ctx, signal);
   const lines = [`Refreshed metadata for ${result.refreshed} server(s).`];
   if (result.failed.length > 0) {
     lines.push("", "Failures:");
@@ -296,13 +296,18 @@ export default function mcporterExtension(pi: ExtensionAPI) {
       }
 
       if (subcommand === "on") {
+        if (!ctx.isProjectTrusted()) {
+          ctx.ui.notify("MCP remains disabled because this project is not trusted. Review it, then restart Pi with --approve.", "warning");
+          return;
+        }
+
         try {
           await runtime.close(true);
           await runtime.loadExtensionEnv();
           enabled = true;
           syncActiveTool(true);
           const env = runtime.getEnvStatus();
-          const envText = env.loaded ? " Loaded extension .env." : " No extension .env found.";
+          const envText = env.loaded ? " Loaded extension secrets into isolated MCP workers." : " No extension .env found.";
           ctx.ui.notify(`Enabled mcp tool for this session.${envText} Use mcp({}) to inspect configured servers.`, "info");
         } catch (error) {
           enabled = false;
@@ -321,6 +326,11 @@ export default function mcporterExtension(pi: ExtensionAPI) {
       }
 
       if (subcommand === "auth" || subcommand === "reset") {
+        if (!ctx.isProjectTrusted()) {
+          ctx.ui.notify("MCP authorization is blocked because this project is not trusted.", "warning");
+          return;
+        }
+
         const reset = subcommand === "reset";
         const closeAfterAuth = !enabled;
         try {
@@ -351,7 +361,7 @@ export default function mcporterExtension(pi: ExtensionAPI) {
         }
 
         try {
-          ctx.ui.notify(await refreshMetadata(rest[0], ctx), "info");
+          ctx.ui.notify(await refreshMetadata(rest[0], ctx, ctx.signal), "info");
         } catch (error) {
           ctx.ui.notify(`Refresh failed: ${sanitizeError(error)}`, "error");
         }
@@ -375,7 +385,15 @@ export default function mcporterExtension(pi: ExtensionAPI) {
       "Use mcp({ describe: \"server.tool\" }) before mcp({ call: \"server.tool\", args: {...} }).",
     ],
     parameters: mcpParameters,
-    async execute(_toolCallId, params: McpParams, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params: McpParams, signal, _onUpdate, ctx) {
+      if (!ctx.isProjectTrusted()) {
+        return {
+          content: [{ type: "text" as const, text: "mcp is blocked because this project is not trusted." }],
+          details: {},
+          isError: true,
+        };
+      }
+
       if (!enabled) {
         return {
           content: [{ type: "text" as const, text: "mcp tool is disabled for this session. Run /mcp on to enable it." }],
@@ -390,19 +408,19 @@ export default function mcporterExtension(pi: ExtensionAPI) {
 
         if (params.refresh !== undefined) {
           mode = "refresh";
-          text = await refreshMetadata(params.refresh, ctx);
+          text = await refreshMetadata(params.refresh, ctx, signal);
         } else if (params.call) {
           mode = "call";
-          text = await callTool(params.call, params.args, ctx, params.server);
+          text = await callTool(params.call, params.args, ctx, params.server, signal);
         } else if (params.describe) {
           mode = "describe";
-          text = await describeTool(params.describe, ctx, params.server);
+          text = await describeTool(params.describe, ctx, params.server, signal);
         } else if (params.search) {
           mode = "search";
-          text = await renderSearchResults(params.search, ctx);
+          text = await renderSearchResults(params.search, ctx, signal);
         } else if (params.server) {
           mode = "server";
-          text = await renderServerTools(params.server, ctx);
+          text = await renderServerTools(params.server, ctx, false, signal);
         } else {
           text = await renderServers(ctx);
         }

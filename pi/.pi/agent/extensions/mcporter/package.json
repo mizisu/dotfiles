@@ -2,7 +2,10 @@
   "name": "pi-mcporter",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "dependencies": {
-    "mcporter": "^0.12.4"
+    "mcporter": "0.12.4"
   }
 }
