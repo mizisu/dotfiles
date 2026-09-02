@@ -1,8 +1,9 @@
 import { type Message, uuidv7 } from "@mariozechner/pi-ai";
 import { DynamicBorder, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { CURSOR_MARKER, Input, Key, SelectList, fuzzyFilter, matchesKey, truncateToWidth, visibleWidth, type Component, type Focusable, type SelectItem } from "@mariozechner/pi-tui";
-import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { constants } from "node:fs";
+import { lstat, mkdtemp, open, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { registerSuccessMessageRenderer } from "./shared/success-message-renderer.js";
 import { resolveMediumModel } from "./shared/model-slots.js";
@@ -570,9 +571,7 @@ async function collectMergedPrStyleExamples(pi: ExtensionAPI, root: string): Pro
 
 function redactStyleUrl(url: string): string {
   if (url.includes("github.com/user-attachments")) return "[screenshot]";
-  if (url.includes("teamlemonbase.slack.com")) return "[Slack link]";
   if (url.includes("notion.so") || url.includes("app.notion.com")) return "[Notion link]";
-  if (url.includes("lemonbase.atlassian.net")) return "[Jira link]";
   if (url.includes("figma.com")) return "[Figma link]";
   return "[link]";
 }
@@ -675,9 +674,8 @@ async function findPrTemplate(root: string): Promise<string | undefined> {
 
   for (const candidate of candidates) {
     try {
-      const fullPath = join(root, candidate);
-      const info = await stat(fullPath);
-      if (info.isFile()) return truncateText(await readFile(fullPath, "utf8"), MAX_TEMPLATE_CHARS);
+      const content = await readWorkspaceFile(root, candidate, MAX_TEMPLATE_CHARS * 4);
+      if (content) return truncateText(content.toString("utf8"), MAX_TEMPLATE_CHARS);
     } catch {
       // Try next candidate.
     }
@@ -685,11 +683,15 @@ async function findPrTemplate(root: string): Promise<string | undefined> {
 
   try {
     const dir = join(root, ".github/PULL_REQUEST_TEMPLATE");
-    const files = (await readdir(dir)).filter((file) => file.toLowerCase().endsWith(".md")).sort();
+    const dirInfo = await lstat(dir);
+    if (!dirInfo.isDirectory() || dirInfo.isSymbolicLink()) return undefined;
+    const canonicalRoot = await realpath(root);
+    const canonicalDir = await realpath(dir);
+    if (!isInside(canonicalRoot, canonicalDir)) return undefined;
+    const files = (await readdir(canonicalDir)).filter((file) => file.toLowerCase().endsWith(".md")).sort();
     for (const file of files) {
-      const fullPath = join(dir, file);
-      const info = await stat(fullPath);
-      if (info.isFile()) return truncateText(await readFile(fullPath, "utf8"), MAX_TEMPLATE_CHARS);
+      const content = await readWorkspaceFile(root, join(".github/PULL_REQUEST_TEMPLATE", file), MAX_TEMPLATE_CHARS * 4);
+      if (content) return truncateText(content.toString("utf8"), MAX_TEMPLATE_CHARS);
     }
   } catch {
     // No template directory.
@@ -700,7 +702,7 @@ async function findPrTemplate(root: string): Promise<string | undefined> {
 
 function normalizeGitPath(value: string | undefined): string | undefined {
   const path = value?.trim().replace(/^\.\//, "").replace(/\\/g, "/");
-  if (!path || path.startsWith("/") || path === "." || path === ".." || path.startsWith("../") || path.includes("/../")) return undefined;
+  if (!path || /[\u0000-\u001f\u007f]/.test(path) || path.startsWith("/") || path === "." || path === ".." || path.startsWith("../") || path.includes("/../")) return undefined;
   return path.replace(/\/+$/, "");
 }
 
@@ -709,6 +711,36 @@ function isSensitivePath(value: string): boolean {
   if (!path) return true;
   if (path === "agent/auth.json") return true;
   return path.split("/").some((part) => part === ".env" || part.startsWith(".env."));
+}
+
+function isInside(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
+async function readWorkspaceFile(root: string, relativePath: string, maxBytes: number): Promise<Buffer | undefined> {
+  const normalized = normalizeGitPath(relativePath);
+  if (!normalized || isSensitivePath(normalized)) return undefined;
+
+  const candidate = join(root, normalized);
+  const pathInfo = await lstat(candidate);
+  if (!pathInfo.isFile() || pathInfo.isSymbolicLink()) return undefined;
+
+  const canonicalRoot = await realpath(root);
+  const canonicalFile = await realpath(candidate);
+  if (!isInside(canonicalRoot, canonicalFile)) return undefined;
+
+  const handle = await open(canonicalFile, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) return undefined;
+    const length = Math.min(info.size, maxBytes);
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(buffer, 0, length, 0);
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
 }
 
 function sanitizeStatusShort(output: string): string {
@@ -846,10 +878,8 @@ async function previewUntrackedFiles(root: string, files: string[]): Promise<str
 
   for (const path of files.slice(0, MAX_CORE_DIFF_FILES)) {
     try {
-      const fullPath = join(root, path);
-      const info = await stat(fullPath);
-      if (!info.isFile()) continue;
-      const buffer = await readFile(fullPath);
+      const buffer = await readWorkspaceFile(root, path, MAX_UNTRACKED_FILE_CHARS * 4);
+      if (!buffer) continue;
       if (!isProbablyText(buffer)) {
         blocks.push(`## ?? ${path}\n[binary or non-text file omitted]`);
         continue;
