@@ -42,14 +42,14 @@ grid_configs:
   grid_defn:
   - border_width: 0.0
     callback: build_cell_strings
-    keys: ASDFG HJKL;
+    keys: QWERT YUIOP ASDFG HJKL; ZXCVB NM,./
     num_cells_x: 10
-    num_cells_y: 1
+    num_cells_y: 3
   - border_width: 1.0
     callback: build_cell_strings
-    keys: QWERT YUIOP ASDFG HJKL; ZXCVB NM,./
+    keys: ASDFG HJKL;
     num_cells_x: 1
-    num_cells_y: 30
+    num_cells_y: 10
   - border_width: 0.0
     callback: apply_strings_and_subgrid_to_cells
     keys: ''
@@ -442,8 +442,8 @@ style_configs:
   - 0.7
   cursor_size: 7
   font_family: HackNF-Bold
-  font_size_multiplier: 0.4
-  font_weight: 500
+  font_size_multiplier: 0.5
+  font_weight: 700
   free_mode_indicator_offset_x: 20
   free_mode_indicator_offset_y: 20
   free_mode_indicator_rgba:
@@ -467,17 +467,17 @@ style_configs:
   - 0.25
   name: catppuccin_macchiato
   show_initial_highlight: false
-  subgrid_font_size_multiplier: 0.75
+  subgrid_font_size_multiplier: 0.85
   subgrid_rgba:
   - 0.501961
   - 0.529412
   - 0.635294
   - 0.5
   subgrid_text_rgba:
-  - 0.576471
-  - 0.603922
-  - 0.717647
-  - 0.5
+  - 0.792157
+  - 0.827451
+  - 0.960784
+  - 0.9
   text_rgba:
   - 0.792157
   - 0.827451
@@ -495,4 +495,4 @@ style_configs:
   text_y_offset: 0.0
   toast_opacity: 0.5
   use_bg_color_transforms: false
-  window_opacity: 0.8
+  window_opacity: 1.0
