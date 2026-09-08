@@ -1,6 +1,6 @@
-import { type Message, uuidv7 } from "@mariozechner/pi-ai";
-import { DynamicBorder, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { CURSOR_MARKER, Input, Key, SelectList, fuzzyFilter, matchesKey, truncateToWidth, visibleWidth, type Component, type Focusable, type SelectItem } from "@mariozechner/pi-tui";
+import { type Message, uuidv7 } from "@earendil-works/pi-ai";
+import { DynamicBorder, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { CURSOR_MARKER, Input, Key, SelectList, fuzzyFilter, matchesKey, truncateToWidth, visibleWidth, type Component, type Focusable, type SelectItem } from "@earendil-works/pi-tui";
 import { constants } from "node:fs";
 import { lstat, mkdtemp, open, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, sep } from "node:path";
@@ -1336,8 +1336,8 @@ export default function prExtension(pi: ExtensionAPI) {
   pi.registerCommand("pr", {
     description: "Create or update a GitHub PR. Command text is used as generation instructions; use --base to override base.",
     handler: async (args, ctx) => {
-      if (!ctx.hasUI) {
-        ctx.ui.notify("/pr requires interactive or RPC UI confirmation", "error");
+      if (ctx.mode !== "tui") {
+        ctx.ui.notify("/pr requires the interactive TUI", "error");
         return;
       }
 

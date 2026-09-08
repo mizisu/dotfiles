@@ -3,7 +3,6 @@ sessions/
 node_modules/
 agent-backups/
 agent/handoffs/
-agent/shake-artifacts
 .env
 .env.*
 agent/extensions/mcporter/mcporter-cache.json

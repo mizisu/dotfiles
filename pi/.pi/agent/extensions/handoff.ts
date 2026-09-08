@@ -1,6 +1,6 @@
-import { type Message, uuidv7 } from "@mariozechner/pi-ai";
-import { BorderedLoader, convertToLlm, DynamicBorder, getAgentDir, serializeConversation, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Input, Key, SelectList, fuzzyFilter, matchesKey, truncateToWidth, type Component, type Focusable, type SelectItem } from "@mariozechner/pi-tui";
+import { type Message, uuidv7 } from "@earendil-works/pi-ai";
+import { BorderedLoader, convertToLlm, DynamicBorder, getAgentDir, serializeConversation, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Input, Key, SelectList, fuzzyFilter, matchesKey, truncateToWidth, type Component, type Focusable, type SelectItem } from "@earendil-works/pi-tui";
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access, mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
@@ -498,8 +498,8 @@ async function showHandoffManager(ctx: any, files: HandoffFile[], currentProject
 }
 
 async function manageHandoffs(pi: ExtensionAPI, ctx: any, initialQuery = ""): Promise<void> {
-  if (!ctx.hasUI) {
-    ctx.ui.notify("/handoff requires interactive or RPC UI", "error");
+  if (ctx.mode !== "tui") {
+    ctx.ui.notify("/handoff requires the interactive TUI", "error");
     return;
   }
 
@@ -620,8 +620,8 @@ export default function handoffExtension(pi: ExtensionAPI) {
         return;
       }
 
-      if (!ctx.hasUI) {
-        ctx.ui.notify("/handoff requires interactive or RPC UI", "error");
+      if (ctx.mode !== "tui") {
+        ctx.ui.notify("/handoff requires the interactive TUI", "error");
         return;
       }
 

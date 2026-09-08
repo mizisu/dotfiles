@@ -1,7 +1,7 @@
-import { type Message, uuidv7 } from "@mariozechner/pi-ai";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { DynamicBorder } from "@mariozechner/pi-coding-agent";
-import { Key, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
+import { type Message, uuidv7 } from "@earendil-works/pi-ai";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder } from "@earendil-works/pi-coding-agent";
+import { Key, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { createCommandWorking, type CommandWorking } from "./shared/command-working.js";
 
 const MAX_CONTEXT_BYTES = 60_000;
@@ -214,7 +214,7 @@ export default function btwExtension(pi: ExtensionAPI) {
   }
 
   pi.on("session_start", (_event, ctx) => {
-    uiRef = ctx.hasUI ? ctx.ui : undefined;
+    uiRef = ctx.mode === "tui" ? ctx.ui : undefined;
     clearThreads();
   });
 
@@ -336,8 +336,8 @@ export default function btwExtension(pi: ExtensionAPI) {
   pi.registerCommand("btw", {
     description: "Ask a quick side question in the background. Use /btw with no args to open result popup.",
     handler: async (args, ctx) => {
-      if (!ctx.hasUI) {
-        ctx.ui.notify("/btw requires interactive mode", "error");
+      if (ctx.mode !== "tui") {
+        ctx.ui.notify("/btw requires the interactive TUI", "error");
         return;
       }
 

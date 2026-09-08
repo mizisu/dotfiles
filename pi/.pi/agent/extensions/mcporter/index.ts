@@ -387,19 +387,11 @@ export default function mcporterExtension(pi: ExtensionAPI) {
     parameters: mcpParameters,
     async execute(_toolCallId, params: McpParams, signal, _onUpdate, ctx) {
       if (!ctx.isProjectTrusted()) {
-        return {
-          content: [{ type: "text" as const, text: "mcp is blocked because this project is not trusted." }],
-          details: {},
-          isError: true,
-        };
+        throw new Error("mcp is blocked because this project is not trusted.");
       }
 
       if (!enabled) {
-        return {
-          content: [{ type: "text" as const, text: "mcp tool is disabled for this session. Run /mcp on to enable it." }],
-          details: {},
-          isError: true,
-        };
+        throw new Error("mcp tool is disabled for this session. Run /mcp on to enable it.");
       }
 
       try {
@@ -427,12 +419,7 @@ export default function mcporterExtension(pi: ExtensionAPI) {
 
         return { content: [{ type: "text" as const, text }], details: { mode } };
       } catch (error) {
-        const message = sanitizeError(error);
-        return {
-          content: [{ type: "text" as const, text: `mcp failed: ${message}` }],
-          details: {},
-          isError: true,
-        };
+        throw new Error(`mcp failed: ${sanitizeError(error)}`);
       }
     },
   });

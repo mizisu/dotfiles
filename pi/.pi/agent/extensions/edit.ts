@@ -6,8 +6,8 @@ import {
   keyHint,
   type ExtensionAPI,
   type ThemeColor,
-} from "@mariozechner/pi-coding-agent";
-import { Container, Spacer, Text, type Component } from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-coding-agent";
+import { Container, Spacer, Text, type Component } from "@earendil-works/pi-tui";
 import { blankLineGutter, lineGutter, lineNumberWidth, numberedLine, type LineMarker } from "./shared/tool-line-display.js";
 
 const READ_COLLAPSED_PREVIEW_LINES = 10;

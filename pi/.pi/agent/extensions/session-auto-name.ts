@@ -1,10 +1,10 @@
-import { type UserMessage, uuidv7 } from "@mariozechner/pi-ai";
+import { type UserMessage, uuidv7 } from "@earendil-works/pi-ai";
 import {
   getAgentDir,
   SettingsManager,
   type ExtensionAPI,
   type ExtensionContext,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 
 const STATUS_KEY = "session-auto-name";
 const MAX_TITLE_LENGTH = 50;
@@ -211,8 +211,8 @@ async function generateTitle(ctx: ExtensionContext, firstUserMessage: string, si
 }
 
 function clearStatus(ctx: ExtensionContext): void {
-  if (!ctx.hasUI) return;
   try {
+    if (!ctx.hasUI) return;
     ctx.ui.setStatus(STATUS_KEY, undefined);
   } catch {
     // The session may be shutting down while title generation is being aborted.
@@ -220,58 +220,80 @@ function clearStatus(ctx: ExtensionContext): void {
 }
 
 function setStatus(ctx: ExtensionContext, text: string): void {
-  if (!ctx.hasUI) return;
   try {
+    if (!ctx.hasUI) return;
     ctx.ui.setStatus(STATUS_KEY, text);
   } catch {
     // Ignore stale UI contexts during shutdown/reload.
   }
 }
 
-export default function (pi: ExtensionAPI) {
-  let namingInFlight = false;
-  let abortController: AbortController | undefined;
+type NamingRun = {
+  generation: number;
+  controller: AbortController;
+};
 
-  async function maybeGenerateSessionName(ctx: ExtensionContext): Promise<void> {
-    if (namingInFlight) return;
+export default function (pi: ExtensionAPI) {
+  let sessionGeneration = 0;
+  let activeRun: NamingRun | undefined;
+
+  function invalidateActiveRun(): number {
+    sessionGeneration += 1;
+    activeRun?.controller.abort();
+    activeRun = undefined;
+    return sessionGeneration;
+  }
+
+  function isCurrentRun(run: NamingRun): boolean {
+    return activeRun === run && run.generation === sessionGeneration && !run.controller.signal.aborted;
+  }
+
+  async function maybeGenerateSessionName(ctx: ExtensionContext, generation: number): Promise<void> {
+    if (generation !== sessionGeneration || activeRun) return;
     if (pi.getSessionName()) return;
 
     const firstUserMessage = getFirstRealUserMessageText(ctx);
     if (!firstUserMessage) return;
 
-    namingInFlight = true;
-    abortController = new AbortController();
+    const run: NamingRun = { generation, controller: new AbortController() };
+    activeRun = run;
     setStatus(ctx, "naming session...");
 
+    let title: string;
     try {
-      const generatedTitle = await generateTitle(ctx, firstUserMessage, abortController.signal);
-      const title = generatedTitle ?? fallbackTitle(firstUserMessage);
-
-      // Do not overwrite a name that was set while the small model was running.
-      if (pi.getSessionName()) return;
-
-      pi.setSessionName(title);
+      const generatedTitle = await generateTitle(ctx, firstUserMessage, run.controller.signal);
+      title = generatedTitle ?? fallbackTitle(firstUserMessage);
     } catch {
-      // Automatic naming should never interrupt the user's main workflow.
-      const title = fallbackTitle(firstUserMessage);
+      if (!isCurrentRun(run)) return;
+      title = fallbackTitle(firstUserMessage);
+    }
+
+    if (!isCurrentRun(run)) return;
+
+    try {
+      // Do not overwrite a name that was set while the small model was running.
       if (!pi.getSessionName()) pi.setSessionName(title);
+    } catch {
+      // Session replacement can invalidate extension APIs between the guard and write.
     } finally {
-      abortController = undefined;
-      namingInFlight = false;
-      clearStatus(ctx);
+      if (activeRun === run) {
+        activeRun = undefined;
+        clearStatus(ctx);
+      }
     }
   }
 
   pi.on("session_start", (_event, ctx) => {
-    void maybeGenerateSessionName(ctx);
+    const generation = invalidateActiveRun();
+    void maybeGenerateSessionName(ctx, generation);
   });
 
   pi.on("agent_end", (_event, ctx) => {
-    void maybeGenerateSessionName(ctx);
+    void maybeGenerateSessionName(ctx, sessionGeneration);
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
-    abortController?.abort();
+    invalidateActiveRun();
     clearStatus(ctx);
   });
 }

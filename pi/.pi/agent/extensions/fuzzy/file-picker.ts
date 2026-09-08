@@ -1,5 +1,5 @@
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { DynamicBorder } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import {
   Input,
   Key,
@@ -8,7 +8,7 @@ import {
   visibleWidth,
   type Component,
   type Focusable,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 
 const PICKER_MAX_VISIBLE = 30;
 const MAX_DISPLAY_FOLDERS = 3;
@@ -253,7 +253,7 @@ export async function showFuzzyFilePicker(
   files: string[],
   initialQuery = "",
 ): Promise<void> {
-  if (!ctx.hasUI) return;
+  if (ctx.mode !== "tui") return;
 
   const entries = pickerEntriesFromFiles(files);
   if (entries.length === 0) {

@@ -3,9 +3,13 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   },
   "dependencies": {
     "mcporter": "0.12.4"
+  },
+  "overrides": {
+    "fast-uri": "3.1.6",
+    "qs": "6.16.0"
   }
 }

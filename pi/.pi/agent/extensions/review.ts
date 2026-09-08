@@ -1,4 +1,4 @@
-import { DynamicBorder, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { DynamicBorder, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   Input,
   Key,
@@ -9,7 +9,7 @@ import {
   type Component,
   type Focusable,
   type SelectItem,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -951,8 +951,8 @@ export default function reviewExtension(pi: ExtensionAPI) {
   pi.registerCommand("review", {
     description: "Run CodeRabbit and Codex reviews in parallel, then select findings to apply.",
     handler: async (args, ctx) => {
-      if (!ctx.hasUI) {
-        ctx.ui.notify("/review requires interactive or RPC UI", "error");
+      if (ctx.mode !== "tui") {
+        ctx.ui.notify("/review requires the interactive TUI", "error");
         return;
       }
 

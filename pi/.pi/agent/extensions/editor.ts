@@ -1,4 +1,9 @@
-import { CustomEditor, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import {
+  CustomEditor,
+  getAgentDir,
+  SettingsManager,
+  type ExtensionAPI,
+} from "@earendil-works/pi-coding-agent";
 import {
   fingerprint,
   isMatchingDoublePaste,
@@ -64,7 +69,19 @@ class PiEditor extends CustomEditor {
 
 export default function editorExtension(pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
-    if (!ctx.hasUI) return;
-    ctx.ui.setEditorComponent((tui, theme, keybindings) => new PiEditor(tui, theme, keybindings));
+    if (ctx.mode !== "tui") return;
+
+    const settings = SettingsManager.create(ctx.cwd, getAgentDir(), {
+      projectTrusted: ctx.isProjectTrusted(),
+    });
+    const options = {
+      paddingX: settings.getEditorPaddingX(),
+      autocompleteMaxVisible: settings.getAutocompleteMaxVisible(),
+      embedWorkingStatus: true,
+    } as const;
+
+    ctx.ui.setEditorComponent(
+      (tui, theme, keybindings) => new PiEditor(tui, theme, keybindings, options),
+    );
   });
 }

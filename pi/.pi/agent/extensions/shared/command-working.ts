@@ -1,4 +1,4 @@
-import { truncateToWidth, type Component } from "@mariozechner/pi-tui";
+import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPINNER_INTERVAL_MS = 80;
@@ -60,13 +60,12 @@ export function createCommandWorking(ctx: any, key: string, title: string): Comm
   return {
     set(message: string | undefined, details: string[] = []) {
       ctx.ui.setStatus(key, message);
-      ctx.ui.setWidget(
-        widgetKey,
-        message
+      const content = !message
+        ? undefined
+        : ctx.mode === "tui"
           ? (tui: any, theme: any) => new CommandWorkingWidget(tui, theme, title, message, details)
-          : undefined,
-        { placement: "aboveEditor" },
-      );
+          : [`${title}: ${message}`, ...details.slice(0, 4)];
+      ctx.ui.setWidget(widgetKey, content, { placement: "aboveEditor" });
     },
     clear() {
       ctx.ui.setStatus(key, undefined);

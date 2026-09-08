@@ -1,5 +1,5 @@
-import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 // Adapted from FredySandoval/pi-logo logo-041 (MIT):
 // https://github.com/FredySandoval/pi-logo
@@ -118,7 +118,7 @@ export default function startupBrand(pi: ExtensionAPI) {
   };
 
   pi.on("session_start", (event, ctx) => {
-    if (!ctx.hasUI) return;
+    if (ctx.mode !== "tui") return;
     if (event.reason !== "startup" && event.reason !== "reload") return;
 
     visible = true;
@@ -135,7 +135,7 @@ export default function startupBrand(pi: ExtensionAPI) {
   });
 
   pi.on("before_agent_start", (_event, ctx) => {
-    if (!ctx.hasUI || !visible) return;
+    if (ctx.mode !== "tui" || !visible) return;
     hide(ctx);
   });
 

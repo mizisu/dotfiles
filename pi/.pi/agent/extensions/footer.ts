@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { resolve as resolvePath } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 const BAR_WIDTH = 12;
 const FOOTER_PADDING = " ";
@@ -239,7 +239,7 @@ function paddedLeftRight(left: string, right: string, width: number): string {
 }
 
 function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
-  if (!ctx.hasUI) return;
+  if (ctx.mode !== "tui") return;
 
   ctx.ui.setFooter((tui, theme, footerData) => {
     let diffStats: GitDiffStats | null = null;
@@ -317,7 +317,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
-    if (!ctx.hasUI) return;
+    if (ctx.mode !== "tui") return;
     ctx.ui.setFooter(undefined);
   });
 }

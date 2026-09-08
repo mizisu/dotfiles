@@ -1,5 +1,5 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 interface QuestionOption {
   label: string;
@@ -201,25 +201,11 @@ export default function askUserExtension(pi: ExtensionAPI) {
         questions = normalizeQuestions(params.questions);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        return {
-          content: [{ type: "text" as const, text: `ask_user failed: ${message}` }],
-          details: { questions: [], answers: [], cancelled: true, customAnswers: [] } satisfies QuestionResultDetails,
-          isError: true,
-        };
+        throw new Error(`ask_user failed: ${message}`);
       }
 
-      if (!ctx.hasUI) {
-        const details: QuestionResultDetails = {
-          questions,
-          answers: questions.map(() => []),
-          cancelled: true,
-          customAnswers: questions.map(() => ""),
-        };
-        return {
-          content: [{ type: "text" as const, text: "ask_user failed: UI is not available in this session." }],
-          details,
-          isError: true,
-        };
+      if (ctx.mode !== "tui") {
+        throw new Error("ask_user failed: the interactive TUI is required.");
       }
 
       const result = await ctx.ui.custom<QuestionResultDetails | undefined>((tui, theme, _keybindings, done) => {

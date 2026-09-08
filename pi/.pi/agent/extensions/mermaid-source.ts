@@ -1,4 +1,3 @@
-// @ts-nocheck -- bridges private TUI state until expanded is exposed to Markdown transformers.
 import {
   AssistantMessageComponent,
   type ExtensionAPI,
@@ -19,6 +18,11 @@ type AssistantInternals = {
   contentContainer?: { children?: unknown[] };
 };
 
+type AssistantPrototype = Record<PropertyKey, unknown> & {
+  setExpanded?: SetExpanded;
+  updateContent?: UpdateContent;
+};
+
 type PatchState = {
   originalSetExpandedDescriptor?: PropertyDescriptor;
   setExpandedGetter: (this: object) => SetExpanded | undefined;
@@ -37,11 +41,8 @@ const PATCH_STATE_KEY = Symbol.for("pi.mermaid-source.patch");
 const MERMAID_FENCE_PATTERN = /^[ \t]{0,3}(?:`{3,}|~{3,})[^\S\r\n]*mermaid\b/im;
 const parser = new Marked();
 
-function assistantPrototype() {
-  return AssistantMessageComponent.prototype as typeof AssistantMessageComponent.prototype & {
-    updateContent: UpdateContent;
-    [PATCH_STATE_KEY]?: PatchState;
-  };
+function assistantPrototype(): AssistantPrototype {
+  return AssistantMessageComponent.prototype as unknown as AssistantPrototype;
 }
 
 function markdownChildren(instance: object): object[] {
@@ -59,20 +60,36 @@ function assistantHasMermaid(instance: object): boolean {
   return markdownChildren(instance).some((child) => MERMAID_FENCE_PATTERN.test(markdownText(child)));
 }
 
-function mermaidSources(markdown: string): string[] {
-  if (!MERMAID_FENCE_PATTERN.test(markdown)) return [];
+function isMermaidToken(token: { type: string; lang?: string }): boolean {
+  if (token.type !== "code") return false;
+  const language = token.lang?.trim().split(/\s+/, 1)[0]?.toLowerCase();
+  return language === "mermaid";
+}
+
+function transformExpandedMarkdown(
+  markdown: string,
+  availableWidth: number,
+  transform?: MarkdownTransform,
+): string {
+  const applyTransform = (source: string) =>
+    transform?.(source, availableWidth) ?? source;
+
+  if (!MERMAID_FENCE_PATTERN.test(markdown)) return applyTransform(markdown);
 
   try {
     return parser
       .lexer(markdown)
-      .filter((token) => {
-        if (token.type !== "code") return false;
-        const language = token.lang?.trim().split(/\s+/, 1)[0]?.toLowerCase();
-        return language === "mermaid";
+      .map((token) => {
+        const transformed = applyTransform(token.raw);
+        if (!isMermaidToken(token) || MERMAID_FENCE_PATTERN.test(transformed)) {
+          return transformed;
+        }
+
+        return `${transformed.trimEnd()}\n\n${token.raw.trimEnd()}\n`;
       })
-      .map((token) => token.raw.trimEnd());
+      .join("");
   } catch {
-    return [];
+    return applyTransform(markdown);
   }
 }
 
@@ -103,15 +120,8 @@ function setMarkdownExpanded(instance: object, expanded: boolean, state: PatchSt
   if (state.wrappedTransforms.has(instance)) return;
 
   const originalTransform = options.transform;
-  const wrapper: MarkdownTransform = (source, availableWidth) => {
-    const transformed = originalTransform?.(source, availableWidth) ?? source;
-    const sources = mermaidSources(source);
-
-    // If the built-in renderer left a Mermaid fence intact, it already serves as source.
-    if (sources.length === 0 || MERMAID_FENCE_PATTERN.test(transformed)) return transformed;
-
-    return `${transformed.trimEnd()}\n\n${sources.join("\n\n")}`;
-  };
+  const wrapper: MarkdownTransform = (source, availableWidth) =>
+    transformExpandedMarkdown(source, availableWidth, originalTransform);
 
   state.originalTransforms.set(instance, originalTransform);
   state.wrappedTransforms.set(instance, wrapper);
@@ -139,13 +149,20 @@ function originalSetExpanded(instance: object, state: PatchState): SetExpanded |
   return typeof value === "function" ? value : undefined;
 }
 
-function installPatch(): PatchState {
+function installPatch(): PatchState | undefined {
   const assistant = assistantPrototype();
-  const existing = assistant[PATCH_STATE_KEY];
+  const existing = assistant[PATCH_STATE_KEY] as PatchState | undefined;
   if (existing) return existing;
 
+  const originalSetExpandedDescriptor = Object.getOwnPropertyDescriptor(assistant, "setExpanded");
+  const originalUpdateContent = assistant.updateContent;
+  const hasSupportedSetExpanded = !originalSetExpandedDescriptor
+    || typeof originalSetExpandedDescriptor.value === "function"
+    || typeof originalSetExpandedDescriptor.get === "function";
+  if (typeof originalUpdateContent !== "function" || !hasSupportedSetExpanded) return undefined;
+
   const state: PatchState = {
-    originalSetExpandedDescriptor: Object.getOwnPropertyDescriptor(assistant, "setExpanded"),
+    originalSetExpandedDescriptor,
     setExpandedGetter: function (this: object) {
       if (state.hasMermaid.get(this)) return state.setExpandedWrapper;
       return originalSetExpanded(this, state);
@@ -156,7 +173,7 @@ function installPatch(): PatchState {
       originalSetExpanded(this, state)?.call(this, expanded);
       applyAssistantExpansion(this, expanded, state);
     },
-    originalUpdateContent: assistant.updateContent,
+    originalUpdateContent,
     updateContentWrapper: function (this: object, message: unknown, isStreaming?: boolean) {
       restoreAssistantTransforms(this, state);
       state.originalUpdateContent.call(this, message, isStreaming);
@@ -188,7 +205,7 @@ function installPatch(): PatchState {
 
 function uninstallPatch(): void {
   const assistant = assistantPrototype();
-  const state = assistant[PATCH_STATE_KEY];
+  const state = assistant[PATCH_STATE_KEY] as PatchState | undefined;
   if (!state) return;
 
   for (const instance of state.wrappedTransforms.keys()) {
@@ -211,14 +228,31 @@ function uninstallPatch(): void {
 }
 
 export default function mermaidSourceExtension(pi: ExtensionAPI) {
-  const state = installPatch();
+  let state: PatchState | undefined;
+  let compatibilityWarningShown = false;
 
   pi.on("session_start", (_event, ctx) => {
+    if (ctx.mode !== "tui") return;
+
+    state = installPatch();
+    if (!state) {
+      if (!compatibilityWarningShown) {
+        compatibilityWarningShown = true;
+        ctx.ui.notify(
+          "Mermaid source expansion was disabled because Pi's internal renderer changed.",
+          "warning",
+        );
+      }
+      return;
+    }
+
     state.getToolsExpanded = () => ctx.ui.getToolsExpanded();
   });
 
   pi.on("session_shutdown", () => {
+    if (!state) return;
     state.getToolsExpanded = undefined;
     uninstallPatch();
+    state = undefined;
   });
 }

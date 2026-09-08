@@ -1,4 +1,4 @@
-import { DynamicBorder, isToolCallEventType, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { DynamicBorder, isToolCallEventType, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   Input,
   Key,
@@ -9,7 +9,7 @@ import {
   type Component,
   type Focusable,
   type SelectItem,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 import { readFile } from "node:fs/promises";
 import { basename, extname, isAbsolute, relative, resolve } from "node:path";
 import type { Diagnostic, LspLocation, WorkspaceSymbol } from "./client.js";
@@ -154,7 +154,10 @@ function renderStatusLines(width: number, theme: any): string[] {
 }
 
 async function showStatusModal(ctx: any): Promise<void> {
-  if (!ctx.hasUI) return;
+  if (ctx.mode !== "tui") {
+    ctx.ui.notify("/lsp status requires the interactive TUI", "warning");
+    return;
+  }
 
   let requestRender = () => {};
   const unsubscribe = manager.onChange(() => requestRender());
@@ -857,7 +860,7 @@ async function postWriteLspMessage(filePath: string): Promise<string> {
 }
 
 async function showPythonSymbolPicker(ctx: any): Promise<void> {
-  if (!ctx.hasUI) return;
+  if (ctx.mode !== "tui") return;
 
   if (!manager.getReadyServer("ty")) {
     ctx.ui.notify("ty LSP is not ready", "warning");
@@ -1032,7 +1035,7 @@ export default function (pi: ExtensionAPI) {
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        return { content: [{ type: "text", text: `search_symbols failed: ${message}` }], details: {}, isError: true };
+        throw new Error(`search_symbols failed: ${message}`);
       }
     },
   });
@@ -1062,7 +1065,7 @@ export default function (pi: ExtensionAPI) {
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        return { content: [{ type: "text", text: `goto_definition failed: ${message}` }], details: {}, isError: true };
+        throw new Error(`goto_definition failed: ${message}`);
       }
     },
   });
@@ -1096,7 +1099,7 @@ export default function (pi: ExtensionAPI) {
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        return { content: [{ type: "text", text: `find_references failed: ${message}` }], details: {}, isError: true };
+        throw new Error(`find_references failed: ${message}`);
       }
     },
   });

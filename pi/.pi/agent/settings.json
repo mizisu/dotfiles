@@ -1,42 +1,43 @@
 {
-	"lastChangelogVersion": "0.84.4",
-	"defaultProvider": "openai-codex",
-	"defaultModel": "gpt-5.6-sol",
-	"fast": true,
-	"mediumProvider": "openai-codex",
-	"mediumModel": "gpt-5.6-terra",
-	"smallProvider": "openai-codex",
-	"smallModel": "gpt-5.6-luna",
-	"theme": "catppuccin-macchiato",
-	"editorPaddingX": 1,
-	"defaultThinkingLevel": "max",
-	"enabledModels": [
-		"openai-codex/gpt-5.3-codex-spark",
-		"openai-codex/gpt-5.6-sol",
-		"openai-codex/gpt-5.6-terra",
-		"openai-codex/gpt-5.6-luna"
-	],
-	"hideThinkingBlock": false,
-	"terminal": {
-		"showImages": true,
-		"clearOnShrink": false,
-		"showTerminalProgress": false
-	},
-	"showHardwareCursor": true,
-	"doubleEscapeAction": "tree",
-	"packages": [
-		"https://github.com/davebcn87/pi-autoresearch",
-		"npm:pi-web-access",
-		"npm:pi-subagents"
-	],
-	"compaction": {
-		"enabled": true
-	},
-	"quietStartup": true,
-	"enableInstallTelemetry": false,
-	"markdown": {
-		"mermaid": "streaming"
-	},
-	"tuiMode": "fullscreen",
-	"fullscreenScrollbar": "auto"
+  "lastChangelogVersion": "0.85.1",
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-6-astra",
+  "fast": false,
+  "mediumProvider": "openai-codex",
+  "mediumModel": "gpt-5.6-terra",
+  "smallProvider": "openai-codex",
+  "smallModel": "gpt-5.6-luna",
+  "theme": "catppuccin-macchiato",
+  "editorPaddingX": 1,
+  "defaultThinkingLevel": "max",
+  "enabledModels": [
+    "openai-codex/gpt-5.6-sol",
+    "openai-codex/gpt-5.6-terra",
+    "openai-codex/gpt-5.6-luna",
+    "openai-codex/gpt-6-astra"
+  ],
+  "hideThinkingBlock": false,
+  "terminal": {
+    "showImages": true,
+    "clearOnShrink": false,
+    "showTerminalProgress": false
+  },
+  "showHardwareCursor": true,
+  "doubleEscapeAction": "tree",
+  "packages": [
+    "https://github.com/davebcn87/pi-autoresearch",
+    "npm:pi-web-access",
+    "npm:pi-subagents"
+  ],
+  "compaction": {
+    "enabled": true
+  },
+  "quietStartup": true,
+  "defaultProjectTrust": "ask",
+  "enableInstallTelemetry": false,
+  "markdown": {
+    "mermaid": "streaming"
+  },
+  "tuiMode": "fullscreen",
+  "fullscreenScrollbar": "auto"
 }

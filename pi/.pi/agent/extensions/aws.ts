@@ -9,7 +9,7 @@ import {
   type ExtensionAPI,
   type ExtensionCommandContext,
   type ExtensionContext,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import { createCommandWorking, type CommandWorking } from "./shared/command-working.js";
 
 const TEMP_DIRECTORY_PREFIX = "pi-aws-";

@@ -1,5 +1,5 @@
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { spawn } from "node:child_process";
 import { showFuzzyFilePicker } from "./file-picker.js";
 import { existsSync } from "node:fs";
@@ -203,7 +203,7 @@ async function runFzf(files: string[], query: string, limit: number, signal: Abo
 
 export default function (pi: ExtensionAPI) {
   async function openFilePicker(ctx: ExtensionContext, initialQuery = ""): Promise<void> {
-    if (!ctx.hasUI) return;
+    if (ctx.mode !== "tui") return;
 
     try {
       const files = await listFiles(pi, ctx.cwd, ctx.signal);

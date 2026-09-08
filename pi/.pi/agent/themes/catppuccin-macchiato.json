@@ -1,5 +1,5 @@
 {
-	"$schema": "https://raw.githubusercontent.com/badlogic/pi-mono/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+	"$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
 	"name": "catppuccin-macchiato",
 	"vars": {
 		"base": "#24273a",
@@ -39,8 +39,12 @@
 		"dim": "overlay0",
 		"text": "",
 		"thinkingText": "subtext0",
+		"scrollbarTrack": "surface1",
+		"scrollbarThumb": "overlay0",
 
 		"selectedBg": "surface0",
+		"searchMatchBg": "surface1",
+		"searchMatchText": "",
 		"userMessageBg": "#2a2d3f",
 		"userMessageText": "",
 		"customMessageBg": "#282536",
@@ -83,6 +87,7 @@
 		"thinkingMedium": "blue",
 		"thinkingHigh": "mauve",
 		"thinkingXhigh": "pink",
+		"thinkingMax": "red",
 
 		"bashMode": "peach"
 	},

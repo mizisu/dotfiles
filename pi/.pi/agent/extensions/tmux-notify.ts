@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const NOTICE_DURATION_MS = 3_000;
 const TMUX_TIMEOUT_MS = 1_000;

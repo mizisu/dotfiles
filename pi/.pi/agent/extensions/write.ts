@@ -5,8 +5,8 @@ import {
   keyHint,
   type ExtensionAPI,
   type ThemeColor,
-} from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { blankLineGutter, lineNumberWidth, numberedLine } from "./shared/tool-line-display.js";
 
 const COLLAPSED_PREVIEW_LINES = 10;
