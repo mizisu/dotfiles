@@ -84,8 +84,8 @@ sketchybar --add item apple left \
 sketchybar --add event aerospace_workspace_change
 
 # AeroSpace Workspaces (ID:Label pairs)
-SPACE_IDS=("Q" "W" "E" "F" "X")
-SPACE_LABELS=("Slack" "Main" "Browser" "Extra" "Finder")
+SPACE_IDS=("Q" "W" "E" "R")
+SPACE_LABELS=("Slack" "Main" "Browser" "Extra")
 
 SPACE=(
   icon.padding_left=12
