@@ -183,20 +183,6 @@ sketchybar --add item wifi right \
            --set wifi "${WIFI[@]}" \
            --subscribe wifi wifi_change
 
-# Bluetooth (icon only)
-BLUETOOTH=(
-  update_freq=30
-  icon.font="Hack Nerd Font Mono:Bold:16.0"
-  icon.color=$LAVENDER
-  label.drawing=off
-  background.color=$BG_SEC_COLR
-  click_script="$PLUGIN_DIR/bluetooth_click.sh"
-  script="$PLUGIN_DIR/bluetooth.sh"
-)
-
-sketchybar --add item bluetooth right \
-           --set bluetooth "${BLUETOOTH[@]}"
-
 # Input Source (한/EN)
 INPUT_SOURCE=(
   update_freq=1
