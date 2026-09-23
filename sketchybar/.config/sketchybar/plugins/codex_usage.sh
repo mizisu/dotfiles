@@ -1,7 +1,8 @@
 #!/bin/bash
 
 # Codex subscription quota via the official Codex app-server RPC.
-# The label shows the most constrained remaining quota, e.g. "41%".
+# Show the most constrained remaining quota and its reset countdown, e.g. "41% 2h15m".
+# Keep the icon and label green regardless of quota or availability.
 
 DIR="$HOME/.config/sketchybar"
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/sketchybar"
@@ -55,9 +56,9 @@ fetch_usage() {
 render_usage() {
   local usage="$1"
   local stale="$2"
-  local summary label remaining color
+  local label
 
-  summary=$(printf '%s' "$usage" | jq -r '
+  label=$(printf '%s' "$usage" | jq -r --argjson now "$(date +%s)" '
     def windows:
       [.primary?, .secondary?]
       | map(select(type == "object" and .usedPercent != null))
@@ -67,43 +68,43 @@ render_usage() {
       (100 - ((.usedPercent // 0) | tonumber))
       | if . < 0 then 0 elif . > 100 then 100 else . end
       | round;
+    def reset_label:
+      (.resetsAt | tonumber? // null) as $reset
+      | if $reset == null then ""
+        else
+          ([0, (($reset - $now) / 60 | ceil)] | max) as $minutes
+          | if $minutes >= 1440 then
+              "\($minutes / 1440 | floor)d\(($minutes % 1440) / 60 | floor)h"
+            elif $minutes >= 60 then
+              "\($minutes / 60 | floor)h\($minutes % 60)m"
+            else
+              "\($minutes)m"
+            end
+          | " \(.)"
+        end;
 
     (.rateLimitsByLimitId.codex // .rateLimits) as $limits
-    | ($limits | windows | map(. | remaining)) as $remaining
-    | select($remaining | length > 0)
-    | [
-        "\($remaining | min)%",
-        ($remaining | min)
-      ]
-    | @tsv
+    | ($limits | windows | min_by(remaining)) as $window
+    | select($window != null)
+    | "\($window | remaining)%\($window | reset_label)"
   ' 2>/dev/null)
 
-  [ -n "$summary" ] || return 1
-
-  IFS=$'\t' read -r label remaining <<< "$summary"
-  if [ "$remaining" -le 20 ]; then
-    color=$RED
-  elif [ "$remaining" -le 50 ]; then
-    color=$YELLOW
-  else
-    color=$GREEN
-  fi
+  [ -n "$label" ] || return 1
 
   if [ "$stale" = true ]; then
     label="~$label"
-    color=$DARK_WHITE
   fi
 
   sketchybar --set "$ITEM_NAME" \
-             icon.color="$color" \
-             label.color="$color" \
+             icon.color="$GREEN" \
+             label.color="$GREEN" \
              label="$label"
 }
 
 render_error() {
   sketchybar --set "$ITEM_NAME" \
-             icon.color="$RED" \
-             label.color="$RED" \
+             icon.color="$GREEN" \
+             label.color="$GREEN" \
              label="--"
 }
 
