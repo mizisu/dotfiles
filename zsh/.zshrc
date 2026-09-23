@@ -148,7 +148,8 @@ alias gd="gh dash"
 alias cr-review='git fetch origin $(base-ref):$(base-ref) &&  cr review --base=$(base-ref) --prompt-only'
 
 # VIM
-alias vim='rm -f ~/.cache/nvim/server.pipe && nvim --listen ~/.cache/nvim/server.pipe'
+alias v='rm -f ~/.cache/nvim/server.pipe && nvim --listen ~/.cache/nvim/server.pipe'
+alias vv='nvim'
 
 # bat
 alias cat=bat
