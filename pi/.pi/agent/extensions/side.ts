@@ -12,7 +12,7 @@ const SIDE_TOOLS = "read,grep,find,ls";
 const SIDE_TOOL_NAMES = new Set(SIDE_TOOLS.split(","));
 const SIDE_EXTENSION = fileURLToPath(import.meta.url);
 const IS_CHILD = process.env.PI_SIDE_CHILD === "1";
-const SIDE_SHORTCUT = "ctrl+s";
+const SIDE_SHORTCUT = "alt+s";
 const TMUX_TIMEOUT_MS = 2_000;
 
 type SideHost = {

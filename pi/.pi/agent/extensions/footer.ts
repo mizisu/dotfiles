@@ -10,6 +10,8 @@ const FOOTER_BOTTOM_PADDING_LINES = 1;
 const GIT_DIFF_REFRESH_MS = 3000;
 const GIT_DIFF_TIMEOUT_MS = 1000;
 const GIT_DIFF_MAX_BUFFER = 4 * 1024 * 1024;
+const PR_REFRESH_MS = 60_000;
+const PR_TIMEOUT_MS = 5_000;
 
 type GitDiffStats = {
   files: number;
@@ -109,6 +111,31 @@ async function loadGitDiffStats(cwd: string): Promise<GitDiffStats | null> {
   return stats.files > 0 ? stats : null;
 }
 
+async function loadPullRequestNumber(
+  pi: ExtensionAPI,
+  cwd: string,
+  signal: AbortSignal,
+): Promise<number | null> {
+  try {
+    // No selector: gh resolves the current branch, including its fork/upstream config.
+    // Passing a numeric branch name as a selector would instead look up that PR number.
+    const result = await pi.exec("gh", ["pr", "view", "--json", "number,state"], {
+      cwd,
+      signal,
+      timeout: PR_TIMEOUT_MS,
+    });
+    if (result.code !== 0 || result.killed) return null;
+
+    const pr = JSON.parse(result.stdout);
+    return pr?.state === "OPEN" && Number.isSafeInteger(pr.number) && pr.number > 0
+      ? pr.number
+      : null;
+  } catch {
+    // No PR, missing gh/auth, offline, and malformed output all leave the footer usable.
+    return null;
+  }
+}
+
 function formatTokens(count: number): string {
   if (!Number.isFinite(count) || count <= 0) return "?";
   if (count < 1000) return Math.round(count).toString();
@@ -180,13 +207,14 @@ function paddedCwdLine(
   theme: any,
   ctx: ExtensionContext,
   branch: string | null,
+  prNumber: number | null,
   stats: GitDiffStats | null,
   width: number,
 ): string {
   const innerWidth = footerContentWidth(width);
   const cwd = formatCwd(ctx);
-  const branchSuffix = branch ? ` (${branch})` : "";
-  const plainCwd = `${cwd}${branchSuffix}`;
+  const prSuffix = prNumber === null ? "" : ` #${prNumber}`;
+  const branchSuffix = branch ? ` (${branch}${prSuffix})` : "";
 
   for (const compact of [false, true]) {
     const statsText = renderGitDiffStats(theme, stats, compact);
@@ -201,7 +229,8 @@ function paddedCwdLine(
     return `${FOOTER_PADDING}${theme.fg("dim", cwdText)} ${statsText}`;
   }
 
-  return paddedLine(theme.fg("dim", plainCwd), width);
+  const cwdText = truncateCwdWithBranch(cwd, branchSuffix, innerWidth) ?? `${cwd}${branchSuffix}`;
+  return paddedLine(theme.fg("dim", cwdText), width);
 }
 
 function renderModel(pi: ExtensionAPI, ctx: ExtensionContext, fastModeEnabled: boolean): string {
@@ -245,6 +274,42 @@ function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
     let diffStats: GitDiffStats | null = null;
     let refreshInFlight = false;
     let disposed = false;
+    let prNumber: number | null = null;
+    let prBranch: string | null = null;
+    let prLastRefresh = -Infinity;
+    let prController: AbortController | undefined;
+
+    const refreshPullRequest = async () => {
+      if (disposed) return;
+
+      const branch = footerData.getGitBranch();
+      if (branch !== prBranch) {
+        prController?.abort();
+        prController = undefined;
+        prBranch = branch;
+        prLastRefresh = -Infinity;
+        prNumber = null;
+        tui.requestRender();
+      }
+
+      if (!branch || branch === "detached" || prController) return;
+      if (Date.now() - prLastRefresh < PR_REFRESH_MS) return;
+
+      const controller = new AbortController();
+      prController = controller;
+      prLastRefresh = Date.now();
+      const nextNumber = await loadPullRequestNumber(pi, ctx.cwd, controller.signal);
+
+      // A branch switch (even A -> B -> A) or disposal invalidates this request.
+      if (prController !== controller) return;
+      prController = undefined;
+      if (disposed || branch !== footerData.getGitBranch()) return;
+
+      if (prNumber !== nextNumber) {
+        prNumber = nextNumber;
+        tui.requestRender();
+      }
+    };
 
     const refreshDiffStats = async () => {
       if (disposed || refreshInFlight) return;
@@ -269,31 +334,30 @@ function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
       if (!disposed) tui.requestRender();
     };
 
-    const interval = setInterval(() => void refreshDiffStats(), GIT_DIFF_REFRESH_MS);
-    const unsubscribeBranch = footerData.onBranchChange(() => {
+    const refresh = () => {
       void refreshDiffStats();
+      void refreshPullRequest();
+    };
+    const interval = setInterval(refresh, GIT_DIFF_REFRESH_MS);
+    const unsubscribeBranch = footerData.onBranchChange(() => {
+      refresh();
       tui.requestRender();
     });
-    void refreshDiffStats();
+    refresh();
 
     return {
       dispose() {
         disposed = true;
         clearInterval(interval);
+        prController?.abort();
         unsubscribeBranch();
       },
       invalidate() {},
       render(width: number): string[] {
         const lines: string[] = [];
         const sessionName = ctx.sessionManager.getSessionName();
-        const goalStatus = footerData.getExtensionStatuses?.().get("goal");
-        const sessionLineParts = [
-          sessionName ? theme.fg("dim", `Session: ${sessionName}`) : "",
-          goalStatus ? theme.fg("accent", goalStatus) : "",
-        ].filter(Boolean);
-
-        if (sessionLineParts.length > 0) {
-          lines.push(paddedLine(sessionLineParts.join(theme.fg("dim", "  •  ")), width));
+        if (sessionName) {
+          lines.push(paddedLine(theme.fg("dim", `Session: ${sessionName}`), width));
         }
 
         const branch = footerData.getGitBranch();
@@ -301,8 +365,10 @@ function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
         const fastModeEnabled = footerData.getExtensionStatuses?.().has("fast") ?? false;
         const modelLine = theme.fg("dim", renderModel(pi, ctx, fastModeEnabled));
 
-        lines.push(paddedCwdLine(theme, ctx, branch, diffStats, width));
+        lines.push(paddedCwdLine(theme, ctx, branch, branch === prBranch ? prNumber : null, diffStats, width));
         lines.push(paddedLeftRight(contextLine, modelLine, width));
+        const goalStatus = footerData.getExtensionStatuses().get("goal");
+        if (goalStatus) lines.push(paddedLine(theme.fg("dim", goalStatus), width));
         lines.push(...Array.from({ length: FOOTER_BOTTOM_PADDING_LINES }, () => ""));
 
         return lines;

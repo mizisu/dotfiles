@@ -1,6 +1,4 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
-import { compact, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { compact, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const COMPACTION_PROVIDER = "openai-codex";
 const COMPACTION_MODEL = "gpt-5.6-luna";
@@ -9,25 +7,6 @@ const STATUS_KEY = "compaction-model";
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function createModelRuntimeStream(ctx: ExtensionContext): StreamFn {
-  return async (model, context, options) => {
-    const { reasoning, ...requestOptions } = options ?? {};
-    const response = await ctx.modelRegistry.complete(model, context, {
-      ...requestOptions,
-      reasoningEffort: reasoning === "off" ? "none" : reasoning,
-    });
-    const stream = createAssistantMessageEventStream();
-
-    if (response.stopReason === "error" || response.stopReason === "aborted") {
-      stream.push({ type: "error", reason: response.stopReason, error: response });
-    } else {
-      stream.push({ type: "done", reason: response.stopReason, message: response });
-    }
-
-    return stream;
-  };
 }
 
 export default function compactionModelExtension(pi: ExtensionAPI) {
@@ -61,7 +40,7 @@ export default function compactionModelExtension(pi: ExtensionAPI) {
         event.customInstructions,
         event.signal,
         COMPACTION_THINKING,
-        createModelRuntimeStream(ctx),
+        (model, context, options) => ctx.modelRegistry.streamSimple(model, context, options),
       );
 
       if (!result.summary.trim()) {

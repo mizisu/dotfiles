@@ -1,5 +1,5 @@
 import { type Message, uuidv7 } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { convertToLlm, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { open, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -143,16 +143,12 @@ function textFromContent(content: unknown): string {
     .join("\n");
 }
 
-function buildSessionContext(ctx: any): string {
-  const branch = ctx.sessionManager?.getBranch?.();
-  if (!Array.isArray(branch)) return "";
-
-  const entries = branch
-    .filter((entry: any) => entry?.type === "message" && entry.message)
+function buildSessionContext(ctx: ExtensionContext): string {
+  const entries = convertToLlm(ctx.sessionManager.buildSessionProjection().messages)
+    .filter((message) => message.role !== "system")
     .slice(-10)
-    .map((entry: any) => {
-      const message = entry.message;
-      const role = typeof message.role === "string" ? message.role : "message";
+    .map((message) => {
+      const role = message.role;
       const text = truncateText(textFromContent(message.content).trim(), 900);
       return text ? `### ${role}\n${text}` : "";
     })

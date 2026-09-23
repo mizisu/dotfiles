@@ -1,6 +1,5 @@
 import { type Message, uuidv7 } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { DynamicBorder } from "@earendil-works/pi-coding-agent";
+import { convertToLlm, DynamicBorder, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { createCommandWorking, type CommandWorking } from "./shared/command-working.js";
 
@@ -73,13 +72,11 @@ function truncateTailByBytes(text: string, maxBytes: number): string {
   return `${kept.join("\n")}\n\n[Output truncated]`;
 }
 
-function buildConversationText(branch: any[]): string {
+function buildConversationText(messages: Message[]): string {
   const chunks: string[] = [];
 
-  for (const entry of branch) {
-    if (entry?.type !== "message") continue;
-    const message = entry.message;
-    if (!message || typeof message.role !== "string") continue;
+  for (const message of messages) {
+    if (message.role === "system") continue;
 
     const text = textFromContent(message.content).trim();
     if (!text) continue;
@@ -363,7 +360,7 @@ export default function btwExtension(pi: ExtensionAPI) {
       const thread: BtwThread = {
         id: nextId++,
         question: text,
-        context: buildConversationText(ctx.sessionManager.getBranch()),
+        context: buildConversationText(convertToLlm(ctx.sessionManager.buildSessionProjection().messages)),
         status: "pending",
         createdAt: Date.now(),
         abort: new AbortController(),

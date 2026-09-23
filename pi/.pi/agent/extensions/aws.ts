@@ -546,7 +546,10 @@ export default function awsExtension(pi: ExtensionAPI) {
   });
 
   pi.on("before_agent_start", async (event) => {
-    if (credentials.size === 0) return undefined;
+    if (credentials.size === 0) {
+      delete event.systemPromptOptions.sections.aws_session;
+      return;
+    }
 
     const loaded = PROFILE_NAMES.filter((name) => credentials.has(name));
     const guidance = [
@@ -562,7 +565,11 @@ export default function awsExtension(pi: ExtensionAPI) {
       "Never inspect, print, or read AWS credential files or credential environment values.",
     ];
 
-    return { systemPrompt: `${event.systemPrompt}\n\n${guidance.join("\n")}` };
+    const content = guidance.join("\n");
+    event.systemPromptOptions.sections.aws_session = content;
+    if (event.systemPromptOptions.forceSystemPrompt !== undefined) {
+      return { systemPrompt: `${event.systemPrompt}\n\n<aws_session>\n${content}\n</aws_session>` };
+    }
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {

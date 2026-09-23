@@ -67,40 +67,6 @@ Recommended structure:
 ## Suggested Prompt
 `;
 
-function entryToMessage(entry: any): any | undefined {
-  if (entry.type === "message") return entry.message;
-  if (entry.type === "compaction") {
-    return {
-      role: "compactionSummary",
-      summary: entry.summary,
-      tokensBefore: entry.tokensBefore,
-      timestamp: new Date(entry.timestamp).getTime(),
-    };
-  }
-  return undefined;
-}
-
-function getHandoffMessages(branch: any[]): any[] {
-  let compactionIndex = -1;
-  for (let index = branch.length - 1; index >= 0; index--) {
-    if (branch[index].type === "compaction") {
-      compactionIndex = index;
-      break;
-    }
-  }
-
-  if (compactionIndex < 0) return branch.map(entryToMessage).filter((message) => message !== undefined);
-
-  const compaction = branch[compactionIndex];
-  const firstKeptIndex = branch.findIndex((entry) => entry.id === compaction.firstKeptEntryId);
-  const compactedBranch = [
-    compaction,
-    ...(firstKeptIndex >= 0 ? branch.slice(firstKeptIndex, compactionIndex) : []),
-    ...branch.slice(compactionIndex + 1),
-  ];
-  return compactedBranch.map(entryToMessage).filter((message) => message !== undefined);
-}
-
 function truncateText(value: string, maxChars = MAX_GIT_OUTPUT_CHARS): string {
   if (value.length <= maxChars) return value;
   const note = "\n[truncated]\n";
@@ -632,7 +598,7 @@ export default function handoffExtension(pi: ExtensionAPI) {
 
       await ctx.waitForIdle();
 
-      const messages = getHandoffMessages(ctx.sessionManager.getBranch());
+      const messages = ctx.sessionManager.buildSessionProjection().messages.filter((message) => message.role !== "system");
       if (messages.length === 0) {
         ctx.ui.notify("No conversation to hand off", "error");
         return;

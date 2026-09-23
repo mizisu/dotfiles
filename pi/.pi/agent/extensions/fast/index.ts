@@ -9,7 +9,6 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 
-const FAST_MODELS = new Set(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
 const FAST_MODE_ENV = "PI_GPT_FAST_MODE";
 const FAST_MODE_STATUS_KEY = "fast";
 
@@ -109,7 +108,6 @@ export default function fastMode(pi: ExtensionAPI): void {
     if (
       !enabled ||
       model?.provider !== "openai-codex" ||
-      !FAST_MODELS.has(model.id) ||
       !payload ||
       typeof payload !== "object" ||
       (payload as Record<string, unknown>).model !== model.id

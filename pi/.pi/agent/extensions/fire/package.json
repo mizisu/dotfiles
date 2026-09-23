@@ -1,0 +1,6 @@
+{
+  "name": "pi-fire",
+  "private": true,
+  "type": "module",
+  "dependencies": { "croner": "9.1.0" }
+}

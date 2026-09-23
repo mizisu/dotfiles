@@ -15,3 +15,4 @@ web-search-cache/
 agent/missions/
 agent/run-history.jsonl
 agent/models-store.json
+agent/fire/
