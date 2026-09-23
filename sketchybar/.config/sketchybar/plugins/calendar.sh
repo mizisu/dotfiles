@@ -6,7 +6,7 @@ export LC_ALL=en_US.UTF-8
 # Calendar plugin - shows next event from "Charles" calendar
 # Format: [icon] [time remaining]: [title]
 # - Ended events: skip
-# - In progress: show time remaining until end
+# - In progress: show time remaining until end; prefer next event in the last 5 minutes
 # - Upcoming: show time until start
 
 CACHE_DIR="$HOME/.cache/sketchybar"
@@ -133,7 +133,7 @@ while IFS= read -r EVENT; do
 done <<< "$EVENTS"
 
 # Determine which event to display
-# If there's an upcoming event within 5 minutes, show that instead of current
+# Prefer the next event in the current event's last 5 minutes, or when it starts soon
 FOUND_TITLE=""
 FOUND_START=""
 FOUND_END=""
@@ -141,9 +141,10 @@ FOUND_DATE=""
 IS_IN_PROGRESS=false
 
 if [ -n "$NEXT_EVENT" ] && [ -n "$CURRENT_EVENT" ]; then
-  # Both exist - check if next event starts within 5 minutes
+  # Both exist - check current event's remaining time and next event's start
+  SECONDS_UNTIL_END=$((CURRENT_END - NOW_EPOCH))
   MINS_UNTIL_NEXT=$(( (NEXT_START - NOW_EPOCH) / 60 ))
-  if [ "$MINS_UNTIL_NEXT" -le 5 ]; then
+  if [ "$SECONDS_UNTIL_END" -le 300 ] || [ "$MINS_UNTIL_NEXT" -le 5 ]; then
     # Show next event
     FOUND_TITLE="$NEXT_EVENT"
     FOUND_START="$NEXT_START"
