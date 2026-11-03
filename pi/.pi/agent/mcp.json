@@ -1,0 +1,53 @@
+{
+  "mcpServers": {
+    "querypie": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "/Users/charles/Desktop/src/querypie-mcp",
+        "querypie-mcp"
+      ],
+      "env": {
+        "DB_PROD_HOST": "10.0.45.235",
+        "DB_PROD_USER": "pr69a229cb-c6df-42ab-a2e3-ceb2e144e328",
+        "DB_PROD_PASSWORD": "${QUERYPIE_PASSWORD}",
+        "DB_PROD_NAME": "lemonbase",
+        "DB_LOCAL_HOST": "127.0.0.1",
+        "DB_LOCAL_PORT": "3306",
+        "DB_LOCAL_USER": "root",
+        "DB_LOCAL_PASSWORD": "${QUERYPIE_LOCAL_PASSWORD}",
+        "DB_LOCAL_NAME": "lemonbase_temp"
+      },
+      "enabled": false,
+      "exposure": "codemode",
+      "description": "Query and inspect QueryPie databases."
+    },
+    "framelink-figma": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "figma-developer-mcp",
+        "--stdio"
+      ],
+      "env": {
+        "FIGMA_API_KEY": "${FIGMA_API_KEY}"
+      },
+      "enabled": false,
+      "exposure": "codemode",
+      "description": "Read Figma design data and export design assets."
+    },
+    "notion": {
+      "url": "https://mcp.notion.com/mcp",
+      "enabled": false,
+      "exposure": "codemode",
+      "description": "Search, read, and update Notion workspace content."
+    },
+    "linear": {
+      "url": "https://mcp.linear.app/mcp",
+      "enabled": false,
+      "exposure": "codemode",
+      "description": "Search and manage Linear issues and projects."
+    }
+  }
+}

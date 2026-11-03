@@ -5,7 +5,8 @@ agent-backups/
 agent/handoffs/
 .env
 .env.*
-agent/extensions/mcporter/mcporter-cache.json
+mcp-auth.json
+mcp-auth-refresh-*
 trust.json
 
 agent/extensions/learnable/
