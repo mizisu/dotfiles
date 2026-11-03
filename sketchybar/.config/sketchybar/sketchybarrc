@@ -218,7 +218,7 @@ CODEX_USAGE=(
   icon.color=$GREEN
   label.color=$GREEN
   background.color=$BG_SEC_COLR
-  click_script="open https://chatgpt.com/codex/settings/usage"
+  click_script="open 'https://chatgpt.com/settings/usage?tab=overview'"
   script="$PLUGIN_DIR/codex_usage.sh"
 )
 

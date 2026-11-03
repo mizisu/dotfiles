@@ -18,7 +18,7 @@ case "$APP_NAME" in
 "Docker" | "Docker Desktop") echo ":docker:" ;;
 "Finder") echo ":finder:" ;;
 "Firefox") echo ":firefox:" ;;
-"Ghostty") echo ":terminal:" ;;
+"Ghostty" | "Rex" | "Rex Beta") echo ":terminal:" ;;
 "GitHub Desktop") echo ":github:" ;;
 "Hyper") echo ":hyper:" ;;
 "iTerm" | "iTerm2") echo ":iterm:" ;;
