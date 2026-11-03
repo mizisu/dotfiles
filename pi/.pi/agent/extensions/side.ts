@@ -7,6 +7,8 @@ import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey } from "@earendil-works/pi-tui";
+import { isRex } from "./shared/rex.js";
+import { rexSideExtension } from "./shared/rex-side.js";
 
 const SIDE_TOOLS = "read,grep,find,ls";
 const SIDE_TOOL_NAMES = new Set(SIDE_TOOLS.split(","));
@@ -315,6 +317,7 @@ function cleanHost(host: SideHost): void {
 }
 
 export default function sideExtension(pi: ExtensionAPI) {
+  if (isRex()) return rexSideExtension(pi, SIDE_EXTENSION);
   const childHost = IS_CHILD ? readChildHost() : undefined;
   let host: SideHost | undefined;
   let unsubscribeSideShortcut: (() => void) | undefined;

@@ -2,22 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey } from "@earendil-works/pi-tui";
-
-type CommandResult = {
-  code: number | null;
-  error?: string;
-};
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function getShell(): { command: string; args: string[] } {
-  if (process.platform === "win32") {
-    return { command: process.env.COMSPEC || "cmd.exe", args: [] };
-  }
-  return { command: process.env.SHELL || "/bin/sh", args: ["-l"] };
-}
+import { errorMessage, getShell, openTerminalApp, type CommandResult } from "./shared/terminal-app.js";
 
 function runTmux(args: string[]): CommandResult {
   const result = spawnSync("tmux", args, {
@@ -173,65 +158,8 @@ function openTmuxPopup(ctx: ExtensionContext): CommandResult | undefined {
   }
 }
 
-async function openDirectTerminal(ctx: ExtensionContext): Promise<void> {
-  const result = await ctx.ui.custom<CommandResult>((tui, _theme, _keybindings, done) => {
-    let settled = false;
-
-    const finish = (commandResult: CommandResult) => {
-      if (settled) return;
-      settled = true;
-      try {
-        tui.start();
-        tui.requestRender(true);
-      } finally {
-        done(commandResult);
-      }
-    };
-
-    setImmediate(() => {
-      try {
-        tui.stop();
-        const shell = getShell();
-        const child = spawnSync(shell.command, shell.args, {
-          cwd: ctx.cwd,
-          stdio: "inherit",
-          env: process.env,
-        });
-        finish({ code: child.status, error: child.error ? errorMessage(child.error) : undefined });
-      } catch (error) {
-        finish({ code: null, error: errorMessage(error) });
-      }
-    });
-
-    return { render: () => [], invalidate: () => {} };
-  });
-
-  if (result.error) {
-    ctx.ui.notify(`terminal failed: ${result.error}`, "error");
-  } else if (result.code !== null && result.code !== 0) {
-    ctx.ui.notify(`terminal exited with code ${result.code}`, "warning");
-  }
-}
-
-async function openTerminal(ctx: ExtensionContext): Promise<void> {
-  if (ctx.mode !== "tui") {
-    if (ctx.hasUI) ctx.ui.notify("terminal requires the interactive TUI", "warning");
-    return;
-  }
-
-  const popupResult = openTmuxPopup(ctx);
-  if (popupResult?.code === 0) return;
-
-  if (!ctx.isIdle()) {
-    const reason = popupResult?.error ? `tmux popup failed: ${popupResult.error}` : "tmux is not available";
-    ctx.ui.notify(`${reason}. Wait for the current agent turn to finish before opening an inline terminal.`, "warning");
-    return;
-  }
-
-  if (popupResult?.error) {
-    ctx.ui.notify(`tmux popup failed; falling back to an inline terminal: ${popupResult.error}`, "warning");
-  }
-  await openDirectTerminal(ctx);
+function openTerminal(ctx: ExtensionContext): Promise<void> {
+  return openTerminalApp(ctx, "terminal", openTmuxPopup);
 }
 
 export default function terminalExtension(pi: ExtensionAPI) {
