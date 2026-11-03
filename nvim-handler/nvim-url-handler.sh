@@ -2,9 +2,7 @@
 set -euo pipefail
 umask 077
 
-readonly NVIM_BIN="/opt/homebrew/bin/nvim"
-readonly CACHE_DIR="$HOME/.cache/nvim"
-readonly SERVER_PIPE="$CACHE_DIR/server.pipe"
+readonly REX_BIN="$HOME/Library/Application Support/com.superlogical.rex/RexServer/Versions/Current/Rex Server.app/Contents/MacOS/rex"
 
 die() {
   printf 'NvimHandler: %s\n' "$*" >&2
@@ -66,34 +64,11 @@ if [[ -n "$column" ]]; then
   (( column >= 1 && column <= 2147483647 )) || die "invalid column number"
 fi
 
-[[ -x "$NVIM_BIN" && -f "$NVIM_BIN" ]] || die "Neovim executable not found"
-[[ ! -L "$CACHE_DIR" ]] || die "refusing symlinked cache directory"
-mkdir -p "$CACHE_DIR"
-[[ -O "$CACHE_DIR" ]] || die "cache directory is not owned by the current user"
-chmod 700 "$CACHE_DIR"
-
-server_running=false
-if [[ -S "$SERVER_PIPE" && ! -L "$SERVER_PIPE" && -O "$SERVER_PIPE" ]] \
-  && "$NVIM_BIN" --server "$SERVER_PIPE" --remote-expr '1' >/dev/null 2>&1; then
-  server_running=true
-elif [[ -e "$SERVER_PIPE" || -L "$SERVER_PIPE" ]]; then
-  [[ -S "$SERVER_PIPE" && ! -L "$SERVER_PIPE" && -O "$SERVER_PIPE" ]] \
-    || die "refusing unsafe server path"
-  rm -f "$SERVER_PIPE"
-fi
-
-if [[ "$server_running" != true ]]; then
-  nvim_args=(--listen "$SERVER_PIPE")
-  [[ -z "$line" ]] || nvim_args+=("+call cursor($line, ${column:-1})")
-  nvim_args+=(-- "$file_path")
-  /usr/bin/open -na Ghostty --args -e "$NVIM_BIN" "${nvim_args[@]}"
-  # ponytail: no startup lock; add lockf only if simultaneous URL opens become real.
-  exit 0
-fi
-
-single_quote="'"
-vim_path="${file_path//$single_quote/$single_quote$single_quote}"
-remote_expression="execute('edit ' . fnameescape('$vim_path'))"
-[[ -z "$line" ]] || remote_expression="[$remote_expression, cursor($line, ${column:-1})][-1]"
-"$NVIM_BIN" --server "$SERVER_PIPE" --remote-expr "$remote_expression" >/dev/null
-/usr/bin/osascript -e 'tell application "Ghostty" to activate'
+[[ -x "$REX_BIN" ]] || die "Rex executable not found"
+/usr/bin/open -b com.superlogical.rex
+# JSON, not Lua or shell source: a URL must never become executable code.
+json_path="${file_path//\\/\\\\}"
+json_path="${json_path//\"/\\\"}"
+printf '{"path":"%s","line":%s,"column":%s}' "$json_path" "${line:-1}" "${column:-1}" \
+  | env -u REX_SESSION -u REX_BLOCK -u REX_CLIENT "$REX_BIN" do open_nvim --args - >/dev/null
+/usr/bin/open -b com.superlogical.rex

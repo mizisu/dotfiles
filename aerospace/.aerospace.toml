@@ -7,10 +7,9 @@ config-version = 2
 
 # You can use it to add commands that run after AeroSpace startup.
 # Available commands : https://nikitabobko.github.io/AeroSpace/commands
-# Run Sketchybar and JankyBorders together with AeroSpace
+# Run Sketchybar with AeroSpace
 after-startup-command = [
   'exec-and-forget sleep 3 && sketchybar',
-  'exec-and-forget sleep 3 && borders active_color=0xfff5bde6 inactive_color=0xff494d64 width=5.0',
   'exec-and-forget sleep 3 && aerospace flatten-workspace-tree',
 ]
 
@@ -240,6 +239,10 @@ run = 'move-node-to-workspace Q'
 
 [[on-window-detected]]
 if.app-id = 'net.kovidgoyal.kitty'
+run = 'move-node-to-workspace W'
+
+[[on-window-detected]]
+if.app-id = 'com.superlogical.rex'
 run = 'move-node-to-workspace W'
 
 [[on-window-detected]]

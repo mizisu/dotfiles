@@ -5,7 +5,7 @@ on open location this_URL
 		set script_path to POSIX path of (resources_path & "nvim-url-handler.sh")
 		
 		-- Both values use AppleScript's shell quoting. The handler itself launches
-		-- Ghostty and Neovim with argv arrays and never evaluates URL text as code.
+		-- Rex and Neovim with argv arrays and never evaluates URL text as code.
 		set shell_command to quoted form of script_path & " " & quoted form of this_URL
 		do shell script shell_command
 	on error error_message

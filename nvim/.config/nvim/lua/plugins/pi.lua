@@ -60,6 +60,50 @@ local function target_pane()
   return nil, "Could not determine target pane in the current tmux window"
 end
 
+local function send_to_rex(reference)
+  local call = require("config.rex").call
+
+  local ok, err = pcall(function()
+    local blocks = call("session.list_blocks", {}).blocks or {}
+    local window
+    for _, block in ipairs(blocks) do
+      if block.block_id == vim.env.REX_BLOCK then window = block.window_id end
+    end
+    assert(window, "Current Rex pane is not placed in a window")
+    local candidates = {}
+    for _, block in ipairs(blocks) do
+      if block.window_id == window and block.block_id ~= vim.env.REX_BLOCK then
+        local process = call("com.superlogical.terminal.process", { block_id = block.block_id, args = vim.empty_dict() })
+        local status = call("com.superlogical.terminal.program_status", { block_id = block.block_id, args = vim.empty_dict() })
+        for _, record in ipairs(status.records or {}) do
+          if (record.app == "pi" or record.effective_app == "pi") and process.foreground
+            and record.owner and record.owner.pid == process.foreground.pid then
+            candidates[#candidates + 1] = { id = block.block_id, title = record.msg or block.label }
+            break
+          end
+        end
+      end
+    end
+    assert(#candidates > 0, "No active Pi found in the current Rex tab")
+    local function paste(target)
+      if not target then return end
+      local sent, message = pcall(function()
+        call("block.event", { block_id = target.id, event = { type = "paste", payload = { text = reference } } })
+        call("session.focus_block", { block_id = target.id })
+      end)
+      if not sent then vim.notify(tostring(message), vim.log.levels.ERROR) end
+    end
+    if #candidates == 1 then paste(candidates[1])
+    else
+      vim.ui.select(candidates, {
+        prompt = "Send to Pi (no Enter):",
+        format_item = function(item) return item.title .. " [" .. item.id:sub(-6) .. "]" end,
+      }, paste)
+    end
+  end)
+  if not ok then vim.notify(tostring(err), vim.log.levels.ERROR) end
+end
+
 local function send_to_pi(reference, append_space)
   if not reference then
     return
@@ -67,6 +111,11 @@ local function send_to_pi(reference, append_space)
 
   if append_space ~= false then
     reference = reference .. " "
+  end
+
+  if require("config.rex").active() then
+    send_to_rex(reference)
+    return
   end
 
   local pane_id, err = target_pane()

@@ -10,10 +10,16 @@ vim.keymap.set("v", "d", '"_d')
 -- vim.keymap.set("n", "<C-u>", "<C-u>zz", { desc = "Scroll up" })
 vim.keymap.set("n", "<C-b>", "<cmd>:bd<CR>", { desc = "Close buffer" })
 
--- Tmux navigation setup
-vim.keymap.set("n", "<C-h>", "<cmd> TmuxNavigateLeft<CR>", { desc = "Window left" })
-vim.keymap.set("n", "<C-l>", "<cmd> TmuxNavigateRight<CR>", { desc = "window right" })
-vim.keymap.set("n", "<C-j>", "<cmd> TmuxNavigateDown<CR>", { desc = "window down" })
-vim.keymap.set("n", "<C-k>", "<cmd> TmuxNavigateUp<CR>", { desc = "window up" })
+-- Keep tmux navigation when nested; Rex gets focus only at a Neovim edge.
+for key, direction in pairs({ h = "left", j = "down", k = "up", l = "right" }) do
+  if require("config.rex").active() then
+    vim.keymap.set("n", "<C-" .. key .. ">", function()
+      require("config.rex").navigate(direction, key)
+    end, { desc = "Window " .. direction .. " (Neovim/Rex)" })
+  else
+    local command = "TmuxNavigate" .. direction:sub(1, 1):upper() .. direction:sub(2)
+    vim.keymap.set("n", "<C-" .. key .. ">", "<cmd>" .. command .. "<CR>", { desc = "Window " .. direction })
+  end
+end
 
 vim.keymap.set("n", "q", "")

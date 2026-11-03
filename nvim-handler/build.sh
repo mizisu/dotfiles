@@ -33,8 +33,8 @@ set_plist_string CFBundleShortVersionString 1.1.0
 /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes array" "$plist"
 /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string nvim" "$plist"
 
-# Script Editor adds unrelated privacy usage descriptions. This app only sends
-# an Apple event to Ghostty, so remove the broad declarations.
+# Script Editor adds unrelated privacy usage descriptions. This app opens Rex
+# through Launch Services, so remove the broad declarations.
 for key in \
   NSAppleMusicUsageDescription \
   NSCalendarsUsageDescription \
