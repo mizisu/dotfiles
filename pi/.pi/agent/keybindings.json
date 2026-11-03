@@ -1,9 +1,13 @@
 {
+  "$schema": "https://pi.dev/schemas/keybindings.schema.json",
   "tui.editor.cursorLineEnd": ["end", "ctrl+end"],
   "tui.altScreen.pageUp": ["pageUp", "ctrl+up"],
   "tui.altScreen.pageDown": ["pageDown", "ctrl+down"],
   "tui.altScreen.top": "ctrl+shift+home",
   "tui.altScreen.bottom": "ctrl+shift+end",
   "tui.altScreen.searchNext": "enter",
-  "app.editor.external": []
+  "app.editor.external": [],
+  "app.thinking.save": "ctrl+alt+s",
+  "app.models.save": "ctrl+alt+s",
+  "app.session.toggleSort": "ctrl+alt+s"
 }

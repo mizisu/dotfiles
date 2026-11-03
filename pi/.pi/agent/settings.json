@@ -1,18 +1,21 @@
 {
-  "lastChangelogVersion": "0.87.1",
+  "$schema": "https://pi.dev/schemas/settings.schema.json",
+  "lastChangelogVersion": "1.5.0",
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-6-astra",
-  "fast": true,
   "mediumProvider": "openai-codex",
-  "mediumModel": "gpt-6-sol",
+  "mediumModel": "gpt-6.1-sol",
   "smallProvider": "openai-codex",
   "smallModel": "gpt-6-luna",
   "theme": "catppuccin-macchiato",
   "editorPaddingX": 1,
-  "defaultThinkingLevel": "max",
+  "defaultThinkingLevel": "xhigh",
+  "defaultTools": [
+    "+codemode"
+  ],
   "enabledModels": [
     "openai-codex/gpt-6-astra",
-    "openai-codex/gpt-6-sol",
+    "openai-codex/gpt-6.1-sol",
     "openai-codex/gpt-6-luna"
   ],
   "subagents": {
@@ -21,16 +24,16 @@
         "model": "openai-codex/gpt-6-luna"
       },
       "worker": {
-        "model": "openai-codex/gpt-6-sol"
+        "model": "openai-codex/gpt-6.1-sol"
       },
       "reviewer": {
-        "model": "openai-codex/gpt-6-sol"
+        "model": "openai-codex/gpt-6.1-sol"
       },
       "delegate": {
-        "model": "openai-codex/gpt-6-sol"
+        "model": "openai-codex/gpt-6.1-sol"
       },
       "researcher": {
-        "model": "openai-codex/gpt-6-sol"
+        "model": "openai-codex/gpt-6.1-sol"
       },
       "evidence-auditor": {
         "model": "openai-codex/gpt-6-astra"
@@ -48,6 +51,9 @@
   },
   "showHardwareCursor": true,
   "doubleEscapeAction": "tree",
+  "extensions": [
+    "-builtin:mcp"
+  ],
   "packages": [
     "https://github.com/davebcn87/pi-autoresearch",
     "npm:pi-web-access",
@@ -63,5 +69,11 @@
     "mermaid": "streaming"
   },
   "tuiMode": "fullscreen",
-  "fullscreenScrollbar": "auto"
+  "fullscreenScrollbar": "auto",
+  "collapseChangelog": true,
+  "extensionChangelogVersions": {
+    "{\"source\":\"https://github.com/davebcn87/pi-autoresearch\",\"scope\":\"user\"}": "1.9.0",
+    "{\"source\":\"npm:pi-web-access\",\"scope\":\"user\"}": "0.46.0",
+    "{\"source\":\"npm:pi-subagents\",\"scope\":\"user\"}": "0.84.0"
+  }
 }
