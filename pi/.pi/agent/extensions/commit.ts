@@ -4,8 +4,9 @@ import { Box, Text } from "@earendil-works/pi-tui";
 import { open, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { resolveMediumModel } from "./shared/model-slots.js";
+import { resolveSmallModel } from "./shared/model-slots.js";
 import { createCommandWorking } from "./shared/command-working.js";
+import { WRITING_STYLE_PROMPT } from "./shared/writing-style.js";
 
 const MAX_DIFF_CHARS = 180_000;
 const MAX_SESSION_CONTEXT_CHARS = 8_000;
@@ -39,11 +40,14 @@ Return ONLY valid JSON, no markdown fences:
   ]
 }
 
+${WRITING_STYLE_PROMPT}
+
 Rules:
 - Group changes by PURPOSE and dependency, not by file extension.
 - Use unscoped Conventional Commits: feat, fix, refactor, chore, docs, style, test, perf, ci, build.
 - Never add a scope: use "feat: summary", not "feat(some-feature): summary".
-- Match "Author commit style examples" when provided: language and description usage, but ignore scopes in examples.
+- Use "Author commit style examples" for language according to the output-language priority above, and match their description usage. Ignore scopes and wording that conflicts with the clarity principles.
+- "Explicit user commit intent" can override the inferred language. Without an explicit language request or usable style history, write the subject and description in Korean.
 - Still keep the subject in unscoped Conventional Commit form; do not copy merge, PR, issue-number suffixes, or co-author trailers from examples.
 - Leave description empty for simple commits; when used, explain why/context/details without repeating the subject.
 - Do not include issue tracker tags.
@@ -497,6 +501,20 @@ function formatPlan(commits: PlanCommit[], warnings: string[], sensitiveSkipped:
   return lines.join("\n");
 }
 
+async function selectCommitAction(
+  ctx: ExtensionContext,
+  title: string,
+  details: string,
+  options: string[],
+): Promise<string | undefined> {
+  const prompt = `${title}\n\n${details}`;
+  if (ctx.mode !== "tui") return ctx.ui.select(prompt, options);
+
+  // Keep long details in the transcript, not in the fixed-height input area.
+  ctx.ui.notify(ctx.ui.theme.fg("text", prompt), "info");
+  return ctx.ui.select(`${title}\nReview the details above before continuing.`, options);
+}
+
 async function git(pi: ExtensionAPI, root: string, args: string[], timeout = 60_000) {
   return pi.exec("git", args, { cwd: root, timeout });
 }
@@ -581,7 +599,7 @@ async function promptPushAfterCommits(
 
   const upstream = await upstreamBranchName(pi, root);
   const target = upstream ?? `origin/${branch}`;
-  const pushChoice = `Push to ${target} (Recommended)`;
+  const pushChoice = `Push to ${target}`;
   const choice = await ctx.ui.select(`Created commits on ${branch}. Push now?`, [pushChoice, "Skip push"]);
   if (choice !== pushChoice) return { text: "✓ Push skipped", failed: false };
 
@@ -667,10 +685,8 @@ function resultText(result: { stdout: string; stderr: string }): string {
 
 type CommitFailureResolution = "committed" | "skip" | "abort" | "fix";
 
-function formatCommitFailurePrompt(index: number, total: number, commit: PlanCommit, errorOutput: string): string {
+function formatCommitFailureDetails(commit: PlanCommit, errorOutput: string): string {
   return [
-    `Commit ${index + 1}/${total} failed`,
-    "",
     commit.subject,
     "",
     "Error output:",
@@ -696,8 +712,8 @@ async function resolveCommitFailure(
 
   while (true) {
     await git(pi, root, ["reset", "--quiet", "HEAD"]);
-    const choice = await ctx.ui.select(formatCommitFailurePrompt(index, total, commit, errorOutput), [
-      "Fix with agent (Recommended)",
+    const choice = await selectCommitAction(ctx, `Commit ${index + 1}/${total} failed`, formatCommitFailureDetails(commit, errorOutput), [
+      "Fix with agent",
       "Retry",
       "Retry --no-verify",
       "Skip this commit",
@@ -723,7 +739,7 @@ async function resolveCommitFailure(
       return "skip";
     }
 
-    if (choice === "Fix with agent (Recommended)") {
+    if (choice === "Fix with agent") {
       await git(pi, root, ["reset", "--quiet", "HEAD"]);
       pi.sendUserMessage(`The /commit command failed while creating commit \"${commit.subject}\". Please fix the issue, then run /commit again.\n\n\`\`\`\n${errorOutput}\n\`\`\``);
       return "fix";
@@ -756,7 +772,7 @@ function registerCommitMessageRenderer(pi: ExtensionAPI): void {
 }
 
 async function createPlan(ctx: any, input: string): Promise<{ text: string; modelReference: string }> {
-  const resolved = await resolveMediumModel(ctx);
+  const resolved = await resolveSmallModel(ctx);
   const messages: Message[] = [{
     role: "user",
     content: [{ type: "text", text: input }],
@@ -840,7 +856,10 @@ export default function commitExtension(pi: ExtensionAPI) {
         const { commits, warnings } = normalizePlan(rawPlan, changedFiles, diffByPath);
 
         setStatus(undefined);
-        const confirmed = await ctx.ui.confirm("Commit plan", formatPlan(commits, warnings, sensitiveSkipped));
+        const plan = formatPlan(commits, warnings, sensitiveSkipped);
+        const confirmed = ctx.mode === "tui"
+          ? await selectCommitAction(ctx, "Commit plan", plan, ["Yes", "No"]) === "Yes"
+          : await ctx.ui.confirm("Commit plan", plan);
         if (!confirmed) {
           ctx.ui.notify("Cancelled", "info");
           return;

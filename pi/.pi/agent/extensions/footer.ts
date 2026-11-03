@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { resolve as resolvePath } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { getCapabilities, hyperlink, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 const BAR_WIDTH = 12;
 const FOOTER_PADDING = " ";
@@ -17,6 +17,11 @@ type GitDiffStats = {
   files: number;
   added: number;
   deleted: number;
+};
+
+type PullRequest = {
+  number: number;
+  url: string;
 };
 
 function execGit(cwd: string, args: string[]): Promise<string> {
@@ -111,15 +116,15 @@ async function loadGitDiffStats(cwd: string): Promise<GitDiffStats | null> {
   return stats.files > 0 ? stats : null;
 }
 
-async function loadPullRequestNumber(
+async function loadPullRequest(
   pi: ExtensionAPI,
   cwd: string,
   signal: AbortSignal,
-): Promise<number | null> {
+): Promise<PullRequest | null> {
   try {
     // No selector: gh resolves the current branch, including its fork/upstream config.
     // Passing a numeric branch name as a selector would instead look up that PR number.
-    const result = await pi.exec("gh", ["pr", "view", "--json", "number,state"], {
+    const result = await pi.exec("gh", ["pr", "view", "--json", "number,state,url"], {
       cwd,
       signal,
       timeout: PR_TIMEOUT_MS,
@@ -127,9 +132,13 @@ async function loadPullRequestNumber(
     if (result.code !== 0 || result.killed) return null;
 
     const pr = JSON.parse(result.stdout);
-    return pr?.state === "OPEN" && Number.isSafeInteger(pr.number) && pr.number > 0
-      ? pr.number
-      : null;
+    if (pr?.state !== "OPEN" || !Number.isSafeInteger(pr.number) || pr.number <= 0 || typeof pr.url !== "string") {
+      return null;
+    }
+
+    const url = new URL(pr.url);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+    return { number: pr.number, url: url.href };
   } catch {
     // No PR, missing gh/auth, offline, and malformed output all leave the footer usable.
     return null;
@@ -207,13 +216,16 @@ function paddedCwdLine(
   theme: any,
   ctx: ExtensionContext,
   branch: string | null,
-  prNumber: number | null,
+  pr: PullRequest | null,
   stats: GitDiffStats | null,
   width: number,
 ): string {
   const innerWidth = footerContentWidth(width);
   const cwd = formatCwd(ctx);
-  const prSuffix = prNumber === null ? "" : ` #${prNumber}`;
+  const prLabel = pr ? `#${pr.number}` : "";
+  const prSuffix = pr
+    ? ` ${getCapabilities().hyperlinks ? hyperlink(theme.underline(prLabel), pr.url) : prLabel}`
+    : "";
   const branchSuffix = branch ? ` (${branch}${prSuffix})` : "";
 
   for (const compact of [false, true]) {
@@ -233,14 +245,13 @@ function paddedCwdLine(
   return paddedLine(theme.fg("dim", cwdText), width);
 }
 
-function renderModel(pi: ExtensionAPI, ctx: ExtensionContext, fastModeEnabled: boolean): string {
+function renderModel(pi: ExtensionAPI, ctx: ExtensionContext): string {
   const parts = [ctx.model?.id ?? "no-model"];
 
   if (ctx.model?.reasoning) {
     const thinkingLevel = pi.getThinkingLevel();
     parts.push(thinkingLevel === "off" ? "thinking off" : thinkingLevel);
   }
-  if (fastModeEnabled) parts.push("fast");
 
   return parts.join(" • ");
 }
@@ -274,7 +285,7 @@ function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
     let diffStats: GitDiffStats | null = null;
     let refreshInFlight = false;
     let disposed = false;
-    let prNumber: number | null = null;
+    let pr: PullRequest | null = null;
     let prBranch: string | null = null;
     let prLastRefresh = -Infinity;
     let prController: AbortController | undefined;
@@ -288,7 +299,7 @@ function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
         prController = undefined;
         prBranch = branch;
         prLastRefresh = -Infinity;
-        prNumber = null;
+        pr = null;
         tui.requestRender();
       }
 
@@ -298,15 +309,15 @@ function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
       const controller = new AbortController();
       prController = controller;
       prLastRefresh = Date.now();
-      const nextNumber = await loadPullRequestNumber(pi, ctx.cwd, controller.signal);
+      const nextPr = await loadPullRequest(pi, ctx.cwd, controller.signal);
 
       // A branch switch (even A -> B -> A) or disposal invalidates this request.
       if (prController !== controller) return;
       prController = undefined;
       if (disposed || branch !== footerData.getGitBranch()) return;
 
-      if (prNumber !== nextNumber) {
-        prNumber = nextNumber;
+      if (pr?.number !== nextPr?.number || pr?.url !== nextPr?.url) {
+        pr = nextPr;
         tui.requestRender();
       }
     };
@@ -362,10 +373,9 @@ function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
 
         const branch = footerData.getGitBranch();
         const contextLine = renderContextUsage(theme, ctx);
-        const fastModeEnabled = footerData.getExtensionStatuses?.().has("fast") ?? false;
-        const modelLine = theme.fg("dim", renderModel(pi, ctx, fastModeEnabled));
+        const modelLine = theme.fg("dim", renderModel(pi, ctx));
 
-        lines.push(paddedCwdLine(theme, ctx, branch, branch === prBranch ? prNumber : null, diffStats, width));
+        lines.push(paddedCwdLine(theme, ctx, branch, branch === prBranch ? pr : null, diffStats, width));
         lines.push(paddedLeftRight(contextLine, modelLine, width));
         const goalStatus = footerData.getExtensionStatuses().get("goal");
         if (goalStatus) lines.push(paddedLine(theme.fg("dim", goalStatus), width));

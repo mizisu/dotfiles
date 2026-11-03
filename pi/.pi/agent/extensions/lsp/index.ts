@@ -252,7 +252,14 @@ function renderDiagnosticsBlocks(defaultFilePath: string, diagnostics: Diagnosti
   const shown = groups.slice(0, MAX_DIAGNOSTIC_FILES);
   const more = groups.length - shown.length;
   const suffix = more > 0 ? `\n... and diagnostics in ${more} more file(s)` : "";
-  return `${shown.map(([filePath, items]) => renderDiagnosticsGroup(filePath, items)).join("\n")}${suffix}`;
+  return `${shown.map(([filePath, items], index) => {
+    const heading = filePath === targetPath
+      ? "Edited file:\n"
+      : index === 0 || shown[index - 1][0] === targetPath
+        ? "Other files (check relevance to this change):\n"
+        : "";
+    return `${heading}${renderDiagnosticsGroup(filePath, items)}`;
+  }).join("\n")}${suffix}`;
 }
 
 function projectRelative(filePath: string): string {
@@ -504,10 +511,6 @@ async function waitForPostWriteServers(filePath: string): Promise<void> {
   });
 }
 
-function hasPostWriteProblems(message: string): boolean {
-  return message.includes("LSP diagnostics detected") || message.includes("LSP diagnostics were not available");
-}
-
 function unavailableDiagnosticsSummary(filePath: string): string {
   const diagnosticsCandidates = postWriteServerCandidates(filePath, "diagnostics");
   const pending = diagnosticsCandidates.filter((server) => server.state === "starting").map((server) => server.spec.displayName);
@@ -560,7 +563,7 @@ async function postWriteLspMessage(filePath: string): Promise<string> {
   }
 
   if (diagnosticsBlock) {
-    parts.push(`LSP diagnostics detected. Fix errors and actionable warnings before finishing:\n${diagnosticsBlock}`);
+    parts.push(`LSP diagnostics detected. Fix change-related errors and actionable warnings; do not assume every finding was introduced by this edit or expand scope to unrelated cleanup:\n${diagnosticsBlock}`);
   }
 
   const unavailable = unavailableDiagnosticsSummary(filePath);
@@ -836,15 +839,19 @@ export default function (pi: ExtensionAPI) {
     const filePath = (event.input as { path?: unknown })?.path;
     if (typeof filePath !== "string" || !filePath.trim()) return;
 
-    const message = await postWriteLspMessage(filePath.replace(/^@/, ""));
+    let message: string;
+    try {
+      message = await postWriteLspMessage(filePath.replace(/^@/, ""));
+    } catch (error) {
+      message = `LSP validation unavailable: ${error instanceof Error ? error.message : String(error)}. Do not treat this file as LSP-clean.`;
+    }
     if (!message) return;
 
     return {
       content: [
         ...event.content,
-        { type: "text" as const, text: `\n\n${message}` },
+        { type: "text" as const, text: `\n\nPost-write LSP check (file changes already applied; do not repeat the edit/write):\n${message}` },
       ],
-      ...(hasPostWriteProblems(message) ? { isError: true } : {}),
     };
   });
 

@@ -516,7 +516,7 @@ export default function askUserExtension(pi: ExtensionAPI) {
           },
           handleInput,
         };
-      });
+      }, { blocked: { kind: "question", message: "Waiting for your answer" } });
 
       const finalResult = result ?? {
         questions,

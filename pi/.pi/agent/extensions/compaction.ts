@@ -1,7 +1,5 @@
 import { compact, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-
-const COMPACTION_PROVIDER = "openai-codex";
-const COMPACTION_MODEL = "gpt-5.6-luna";
+import { resolveSmallModel } from "./shared/model-slots.js";
 const COMPACTION_THINKING = "medium";
 const STATUS_KEY = "compaction-model";
 
@@ -11,14 +9,17 @@ function errorMessage(error: unknown): string {
 
 export default function compactionModelExtension(pi: ExtensionAPI) {
   pi.on("session_before_compact", async (event, ctx) => {
-    const model = ctx.modelRegistry.find(COMPACTION_PROVIDER, COMPACTION_MODEL);
-    if (!model) {
+    let slot: Awaited<ReturnType<typeof resolveSmallModel>>;
+    try {
+      slot = await resolveSmallModel(ctx);
+    } catch (error) {
       ctx.ui.notify(
-        `Compaction model not found: ${COMPACTION_PROVIDER}/${COMPACTION_MODEL}; using the active model`,
+        `Compaction model unavailable: ${errorMessage(error)}; using the active model`,
         "warning",
       );
       return;
     }
+    const { model, reference } = slot;
 
     if (ctx.model && model.contextWindow < ctx.model.contextWindow) {
       ctx.ui.notify(
@@ -28,7 +29,6 @@ export default function compactionModelExtension(pi: ExtensionAPI) {
       return;
     }
 
-    const reference = `${model.provider}/${model.id}`;
     ctx.ui.setStatus(STATUS_KEY, `compacting with ${model.id} · ${COMPACTION_THINKING}`);
 
     try {
