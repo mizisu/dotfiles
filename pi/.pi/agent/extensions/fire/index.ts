@@ -1,13 +1,13 @@
 import type { ExtensionAPI, ExtensionContext, SlashCommandInfo, Theme } from '@earendil-works/pi-coding-agent';
-import { getPackageDir, keyText, stripFrontmatter } from '@earendil-works/pi-coding-agent';
+import { getPackageDir, stripFrontmatter } from '@earendil-works/pi-coding-agent';
 import { Input, Editor, Markdown, Text, CombinedAutocompleteProvider, CURSOR_MARKER, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, type AutocompleteProvider } from '@earendil-works/pi-tui';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { defaultRoot, requestHost, activate, parseCommand, cronPreview, assistantResultFromEntries, validateConfig, osTimezone } from './runtime.mjs';
 
 type Config = { id?: string; name: string; cwd: string; mode: 'run' | 'run-worktree'; cron: string; enabled: boolean; overlap: 'skip' | 'parallel'; prompt: string; remote?: string; base?: string };
-type Run = { id: string; scheduleId: string | null; startedAt: number; endedAt?: number; runtime: string; cleanup: string; result?: string; blocked?: string; config: Config; manual?: string; error?: string; skipped?: string; [key: string]: unknown };
-type Schedule = Config & { id: string; archived?: boolean; next?: number };
+type Run = { id: string; scheduleId: string | null; startedAt: number; endedAt?: number; runtime: string; cleanup: string; result?: string; blocked?: string; aborted?: boolean; config: Config; manual?: string; error?: string; skipped?: string; [key: string]: unknown };
+type Schedule = Config & { id: string; next?: number };
 type Snapshot = { schedules: Schedule[]; runs: Run[]; timezone?: string; connected?: boolean };
 type ViewState = { bucket: string; runId?: string; selections?: Record<string, string>; pane: number; tab: number; expanded: boolean; scroll: Record<string, number> };
 const stateDefault = (): ViewState => ({ bucket: 'once', pane: 0, tab: 0, expanded: false, scroll: {} });
@@ -54,7 +54,7 @@ export function runLabel(run: Run) {
   if (run.manual || run.runtime === 'unknown' || run.cleanup === 'manual') return 'MANUAL';
   if (run.runtime === 'skipped') return 'SKIPPED';
   if (run.runtime !== 'terminated' || ['pending', 'removing'].includes(run.cleanup)) return `${run.runtime}/${run.cleanup}`;
-  return run.error ? 'ERROR' : run.stopRequested ? 'STOPPED' : run.blocked ? 'BLOCKED' : 'ENDED';
+  return run.error ? 'ERROR' : run.stopRequested ? 'STOPPED' : run.blocked ? 'BLOCKED' : run.aborted ? 'ABORTED' : 'ENDED';
 }
 
 type FireToolLine = { text: string; tone: Parameters<Theme['fg']>[0] };
@@ -64,14 +64,14 @@ function fireToolSummary(action: string, data: any): FireToolLine[] {
   const add = (text: unknown, tone: FireToolLine['tone'] = 'muted') => rows.push({ text: truncateToWidth(singleLine(text), 240, '…'), tone });
   const runTone = (run: Run): FireToolLine['tone'] => {
     const label = runLabel(run);
-    return ['MANUAL', 'BLOCKED'].includes(label) ? 'warning' : run.error ? 'error' : ['preparing', 'running'].includes(run.runtime) ? 'accent' : 'muted';
+    return ['MANUAL', 'BLOCKED', 'ABORTED'].includes(label) ? 'warning' : run.error ? 'error' : ['preparing', 'running'].includes(run.runtime) ? 'accent' : 'muted';
   };
   const runSummary = (run: Run) => run.manual || run.error || run.blocked || run.result || run.skipped || run.config.prompt;
-  const scheduleState = (schedule: Schedule) => schedule.archived ? 'Archived' : schedule.enabled ? 'Active' : 'Paused';
+  const scheduleState = (schedule: Schedule) => schedule.enabled ? 'Active' : 'Paused';
   if (action === 'list' && Array.isArray(data?.schedules) && Array.isArray(data?.runs)) {
     const { schedules, runs } = data as Snapshot;
     add(`${schedules.length} schedules · ${runs.length} runs · ${data.timezone || 'Mac timezone'}`, 'accent');
-    const attention = runs.filter(run => run.error || ['MANUAL', 'BLOCKED'].includes(runLabel(run))).length;
+    const attention = runs.filter(run => run.error || ['MANUAL', 'BLOCKED', 'ABORTED'].includes(runLabel(run))).length;
     if (attention) add(`! ${attention} ${attention === 1 ? 'run needs' : 'runs need'} attention · /fire to inspect`, 'warning');
     for (const schedule of schedules.slice(0, 2)) add(`${scheduleState(schedule)} · ${schedule.name} · ${schedule.cron}`);
     if (schedules.length > 2) add(`… ${schedules.length - 2} more schedules`, 'dim');
@@ -83,10 +83,13 @@ function fireToolSummary(action: string, data: any): FireToolLine[] {
     add(`${runLabel(run)} · ${run.id}`, runTone(run));
     add(`${run.config.mode} · ${run.executionCwd || run.config.cwd}`);
     add(runSummary(run), runTone(run));
-  } else if (['save', 'pause', 'archive'].includes(action) && data?.id && typeof data?.cron === 'string') {
-    add(`${action === 'save' ? 'Schedule saved' : action === 'archive' ? 'Schedule archived' : data.enabled ? 'Schedule resumed' : 'Schedule paused'} · ${data.name}`, 'success');
+  } else if (['save', 'pause'].includes(action) && data?.id && typeof data?.cron === 'string') {
+    add(`${action === 'save' ? 'Schedule saved' : data.enabled ? 'Schedule resumed' : 'Schedule paused'} · ${data.name}`, 'success');
     add(`${scheduleState(data)} · ${data.id}`);
     add(`${data.cron} · ${data.mode} · ${data.cwd}`);
+  } else if (action === 'delete-schedule' && data?.deletedSchedule) {
+    add(`Permanently deleted schedule · ${data.deletedSchedule}`, 'success');
+    add(`${data.deletedRuns} runs and their owned records deleted`);
   } else if (action === 'delete' && data?.deleted) {
     add(`Deleted run · ${data.deleted}`, 'success');
   } else if (action === 'preview' && Array.isArray(data)) {
@@ -152,12 +155,12 @@ export function buildFireActionReview(request: any, now = new Date(), timezone =
     save: [request.config?.id ? 'Update schedule' : 'Create schedule', 'Save', 'Save future scheduling settings. Existing runs are unchanged.'],
     run: [request.id ? 'Run saved schedule' : 'Start background run', 'Run', request.id ? 'Start the latest saved configuration with Pi defaults. The recurring schedule is unchanged.' : 'Start a fresh background Pi task. Your current conversation is not inherited.'],
     pause: ['Toggle schedule', 'Toggle', 'Switch the saved schedule between active and paused. Active runs and history are unchanged.'],
-    archive: ['Archive schedule', 'Archive', 'Disable future runs and move the schedule to the archive. Active runs and all history are retained.'],
+    'delete-schedule': ['Delete schedule permanently', 'Delete', 'Permanently delete this schedule and all its runs, conversations and owned records. Future runs stop. This cannot be undone.'],
     stop: ['Stop run', 'Stop', 'Request native cancellation and wait for termination. No force-kill or arbitrary PID killing.'],
     delete: ['Delete run permanently', 'Delete', 'Permanently delete this run, its conversation and owned files. This cannot be undone.'],
   };
   const action = actions[request.action]; if (!action) throw new Error('Unknown Fire action');
-  const review: ActionReview = { title: action[0], approve: action[1], danger: request.action === 'delete', fields: [], nextRuns: [], paused: false, effect: action[2] };
+  const review: ActionReview = { title: action[0], approve: action[1], danger: ['delete', 'delete-schedule'].includes(request.action), fields: [], nextRuns: [], paused: false, effect: action[2] };
   const scheduled = request.action === 'save';
   const id = scheduled ? request.config?.id : request.id;
   if (id) review.fields.push([['stop', 'delete'].includes(request.action) ? 'Run ID' : 'Schedule ID', String(id)]);
@@ -179,7 +182,8 @@ export function buildFireActionReview(request: any, now = new Date(), timezone =
   }
   if (request.action === 'run' && id) review.warning = 'The saved mode and prompt are used at execution. A disposable worktree discards dirty, staged, untracked and ignored files after verified termination.';
   if (request.action === 'stop') review.warning = 'A disposable worktree is cleaned after verified termination; its local files are discarded. Shared-folder files are not removed.';
-  if (request.action === 'delete') review.warning = 'Residual worktree cleanup requires verified ownership and one explicit attempt, including dirty, staged, untracked and ignored files. Cleanup failure retains evidence. Remote PRs and external artifacts are not deleted.';
+  if (request.action === 'delete-schedule') review.warning = 'Running, unconfirmed or incompletely cleaned runs block deletion. Resolve them individually first. Fire-owned test-perf-artifacts are deleted with each run. Remote PRs, source folders and external resources are not deleted. A partial deletion failure leaves the schedule paused; inspect the reported error.';
+  if (request.action === 'delete') review.warning = 'Residual worktree cleanup requires verified ownership and one explicit attempt, including dirty, staged, untracked and ignored files. Cleanup failure retains evidence. Fire-owned test-perf-artifacts are deleted. Remote PRs and external resources are not deleted.';
   return review;
 }
 
@@ -364,11 +368,10 @@ export class FireView {
   invalidate() { this.input.invalidate(); this.editor.invalidate(); }
   dispose() { this.closed = true; clearInterval(this.timer); this.editor.setAutocompleteProvider(this.promptAutocomplete); }
   buckets() {
-    const archived = this.snapshot.schedules.filter(s => s.archived).map(s => ({ id: s.id, name: s.name }));
-    return [{ id: 'once', name: 'One-off runs' }, ...this.snapshot.schedules.filter(s => !s.archived).map(s => ({ id: s.id, name: s.name })), ...(archived.length ? [{ id: 'archive', name: 'Archived schedules' }] : []), ...archived];
+    return [{ id: 'once', name: 'One-off runs' }, ...this.snapshot.schedules.map(s => ({ id: s.id, name: s.name }))];
   }
   schedule() { return this.snapshot.schedules.find(s => s.id === this.state.bucket); }
-  runs() { return this.snapshot.runs.filter(r => this.state.bucket === 'once' ? !r.scheduleId : this.state.bucket === 'archive' ? this.snapshot.schedules.some(s => s.archived && s.id === r.scheduleId) : r.scheduleId === this.state.bucket); }
+  runs() { return this.snapshot.runs.filter(r => this.state.bucket === 'once' ? !r.scheduleId : r.scheduleId === this.state.bucket); }
   selectedRun() { const runs = this.runs(); return runs.find(r => r.id === this.state.runId) || runs[0]; }
   async refresh() {
     if (this.closed) return;
@@ -424,7 +427,11 @@ export class FireView {
     const manualCleanupVerified = action === 'delete' ? await this.nativeDialog(() => reconcileDeletion(this.ctx, this.snapshot.runs.find(r => r.id === id))) : false;
     if (manualCleanupVerified === undefined) return;
     await this.call({ action, id, manualCleanupVerified });
-    this.notice = { tone: 'success', text: `${action === 'run' ? 'Run accepted' : action === 'stop' ? 'Stop requested' : action === 'delete' ? 'Run permanently deleted' : action === 'archive' ? 'Schedule archived; history retained' : 'Schedule updated'} · ${id.slice(0, 8)}` };
+    if (action === 'delete-schedule' || action === 'delete') {
+      this.transcript = []; this.transcriptId = undefined;
+      if (action === 'delete-schedule' && this.draft?.id === id) { this.draft = undefined; this.editing = false; }
+    }
+    this.notice = { tone: 'success', text: `${action === 'run' ? 'Run accepted' : action === 'stop' ? 'Stop requested' : action === 'delete' ? 'Run permanently deleted' : action === 'delete-schedule' ? 'Schedule and history permanently deleted' : 'Schedule updated'} · ${id.slice(0, 8)}` };
   }
   openForm(existing?: Schedule) {
     this.draft = { name: '', cwd: this.ctx.cwd, mode: 'run', cron: '0 13 * * 1-5', enabled: true, overlap: 'skip', prompt: '', ...existing };
@@ -450,6 +457,7 @@ export class FireView {
     if (label === 'manual') return this.theme.fg('warning', '! MANUAL');
     if (label === 'error') return this.theme.fg('error', '✗ Error');
     if (label === 'blocked') return this.theme.fg('warning', '■ Blocked');
+    if (label === 'aborted') return this.theme.fg('warning', '■ Aborted');
     if (label === 'skipped') return this.theme.fg('dim', '○ Skipped');
     if (run.runtime === 'preparing') return this.theme.fg('accent', '○ Preparing');
     if (run.runtime === 'running') return this.theme.fg('accent', run.stopRequested ? '■ Stopping' : '● Running');
@@ -526,6 +534,7 @@ export class FireView {
     if (run.manual) { heading('! Manual action required'); text(run.manual, 'warning'); text('Evidence retained. No automatic cleanup retry.', 'muted'); }
     if (run.error) { heading('Execution error'); text(run.error, 'error'); }
     if (run.blocked) { heading('Human input unavailable'); text(run.blocked, 'warning'); }
+    if (run.aborted) { heading('Execution aborted'); text('The agent run was cancelled before completion. Any assistant response below may be partial.', 'warning'); }
     if (run.skipped) text(run.skipped, 'muted');
     if (this.state.tab === 0) {
       if (run.result) { heading('Assistant response'); lines.push(...this.markdown(run.result, width)); }
@@ -554,7 +563,7 @@ export class FireView {
   emptyLines(width: number) {
     const offline = this.snapshot.connected === false;
     const title = offline ? '○ Fire is disconnected' : this.snapshot.connected === undefined ? 'Connecting to Fire…' : 'No runs yet';
-    const hint = offline ? 'Press g to reconnect, or a to activate the host. Existing history is not removed.' : this.schedule() ? 'Press r to run this schedule now. Future runs appear here automatically.' : this.state.bucket === 'archive' ? 'Archived schedules keep their past conversations here.' : 'Use /fire run <prompt> for a one-off task, or n to create a schedule.';
+    const hint = offline ? 'Press g to reconnect, or a to activate the host. Existing history is not removed.' : this.schedule() ? 'Press r to run this schedule now. Future runs appear here automatically.' : 'Use /fire run <prompt> for a one-off task, or n to create a schedule.';
     return ['', this.theme.fg(offline ? 'warning' : 'muted', this.theme.bold(title)), '', ...wrapTextWithAnsi(this.theme.fg('dim', hint), Math.max(1, width)), ...(offline && this.connectionError ? ['', ...wrapTextWithAnsi(this.theme.fg('dim', safe(this.connectionError)), Math.max(1, width))] : [])];
   }
   scheduleLines(width: number, height: number) {
@@ -565,13 +574,13 @@ export class FireView {
     const lines = [this.section('Schedules', width, this.state.pane === 0)];
     for (const bucket of buckets.slice(start, start + capacity)) {
       const s = this.snapshot.schedules.find(s => s.id === bucket.id);
-      const count = this.snapshot.runs.filter(r => bucket.id === 'once' ? !r.scheduleId : bucket.id === 'archive' ? this.snapshot.schedules.some(s => s.archived && s.id === r.scheduleId) : r.scheduleId === bucket.id).length;
+      const count = this.snapshot.runs.filter(r => bucket.id === 'once' ? !r.scheduleId : r.scheduleId === bucket.id).length;
       const selected = bucket.id === this.state.bucket;
-      const glyph = s ? s.archived ? '○' : s.enabled ? '●' : 'Ⅱ' : '◇';
-      const color = s?.archived ? 'dim' : s && !s.enabled ? 'warning' : 'accent';
+      const glyph = s ? s.enabled ? '●' : 'Ⅱ' : '◇';
+      const color = s && !s.enabled ? 'warning' : 'accent';
       const title = `${selected ? this.theme.fg('accent', '›') : ' '} ${this.theme.fg(color, glyph)} ${selected ? this.theme.bold(singleLine(bucket.name)) : singleLine(bucket.name)}`;
       lines.push(this.selectedLine(pair(title, this.theme.fg('dim', String(count)), width), width, selected, this.state.pane === 0));
-      const detail = s ? s.archived ? 'Archived · history retained' : !s.enabled ? 'Paused · manual run available' : s.next ? `Next ${shortDate(s.next)}` : 'Next run pending' : bucket.id === 'once' ? 'Independent background tasks' : 'Past schedules & conversations';
+      const detail = s ? !s.enabled ? 'Paused · manual run available' : s.next ? `Next ${shortDate(s.next)}` : 'Next run pending' : 'Independent background tasks';
       lines.push(this.selectedLine('    ' + this.theme.fg('dim', detail), width, selected, this.state.pane === 0));
     }
     if (buckets.length > capacity) lines.push(this.theme.fg('dim', ` ${selected + 1}/${buckets.length} · ↑↓ more`));
@@ -579,9 +588,9 @@ export class FireView {
   }
   historyLines(width: number, height: number) {
     const s = this.schedule(); const runs = this.runs(); const selected = runs.findIndex(r => r.id === this.selectedRun()?.id);
-    const title = s?.name || (this.state.bucket === 'once' ? 'One-off runs' : 'Archived schedules');
+    const title = s?.name || 'One-off runs';
     const context = s ? `${s.mode} · ${s.cron} · ${s.overlap}` : 'Independent sessions · newest first';
-    const lines = [pair(' ' + this.theme.bold(singleLine(title)), this.theme.fg('muted', s?.archived ? 'Archived' : s ? s.enabled ? 'Active' : 'Paused' : ''), width), fit(' ' + this.theme.fg('dim', context), width), this.section(`History · ${runs.length} ${runs.length === 1 ? 'run' : 'runs'}`, width, this.state.pane === 1)];
+    const lines = [pair(' ' + this.theme.bold(singleLine(title)), this.theme.fg('muted', s ? s.enabled ? 'Active' : 'Paused' : ''), width), fit(' ' + this.theme.fg('dim', context), width), this.section(`History · ${runs.length} ${runs.length === 1 ? 'run' : 'runs'}`, width, this.state.pane === 1)];
     if (!runs.length) return [...lines, ...this.emptyLines(width - 2).map(s => ' ' + s)].slice(0, height);
     const capacity = Math.max(1, Math.floor((height - lines.length) / 2));
     if (this.state.pane === 1) this.listPageSize = capacity;
@@ -616,7 +625,7 @@ export class FireView {
   helpLines(width: number) {
     const sections = [
       ['Navigate', 'Tab / Shift+Tab  Next / previous pane', 'Focus keys: [1] Schedules · [2] History · [3] Detail', '↑↓ or j/k  Select or scroll', 'PgUp / PgDn  Page through the focused pane', 'Ctrl+U / Ctrl+D  Half-page scroll in Detail', 'Home / End  First / last item or line', 'Enter  Open the next pane', 'i  Conversation / environment', 'o  Expand / fold tools and thinking'],
-      ['Schedules', 'n  New schedule', 'e  Edit schedule / resume folded draft', 'p  Pause / resume future runs', 'r  Run selected schedule now (confirmation)', 'd  Archive schedule; keep history (confirmation)'],
+      ['Schedules', 'n  New schedule', 'e  Edit schedule / resume folded draft', 'p  Pause / resume future runs', 'r  Run selected schedule now (confirmation)', 'd  Permanently delete schedule and its history (confirmation)'],
       ['Runs', 'x  Request native stop (confirmation)', 'Shift+D  Permanently delete selected run (confirmation)', 'No force-kill or automatic cleanup retry.'],
       ['Connection', 'g  Reconnect / refresh', 'a  Activate host (confirmation; may incur provider cost)', 'Esc  Close Fire; background runs continue'],
       ['Editor', 'Tab / Shift+Tab  Next / previous field', 'Space / Enter  Change a choice', 'Ctrl+S  Review and save', 'Esc  Fold draft; closing Fire discards it'],
@@ -691,7 +700,7 @@ export class FireView {
     if (!this.snapshot.connected) return this.renderWidth < 55 ? 'g retry · a activate' : 'g reconnect · a activate · ? help';
     if (this.draft) return 'e resume draft · n new · ? help';
     const schedule = this.schedule(); const run = this.selectedRun();
-    if (this.state.pane === 0) return schedule && !schedule.archived ? `n new · e edit · p ${schedule.enabled ? 'pause' : 'resume'} · r run · d archive` : 'n new schedule · Enter history';
+    if (this.state.pane === 0) return schedule ? `n new · e edit · p ${schedule.enabled ? 'pause' : 'resume'} · r run · d delete` : 'n new schedule · Enter history';
     if (this.state.pane === 1) return run ? `${run.runtime === 'running' || run.runtime === 'preparing' ? 'x stop' : run.runtime === 'unknown' ? 'MANUAL · inspect before acting' : 'Shift+D delete'} · Enter detail` : 'n new schedule · ? help';
     return `i ${this.state.tab ? 'conversation' : 'environment'} · o ${this.state.expanded ? 'fold' : 'expand'} tools · ↑↓ / Ctrl+U/D scroll`;
   }
@@ -798,19 +807,22 @@ export class FireView {
       if (this.draft) this.confirm('Discard the unsaved draft and start a new schedule? No saved schedule or run is affected.', async () => this.openForm(), 'Discard draft');
       else this.openForm();
     }
-    else if (data === 'e') { if (this.draft) { this.editing = true; this.loadField(); } else if (this.schedule() && !this.schedule()?.archived) this.openForm(this.schedule()); }
+    else if (data === 'e') { if (this.draft) { this.editing = true; this.loadField(); } else if (this.schedule()) this.openForm(this.schedule()); }
     else if (['p', 'r', 'd'].includes(data)) {
       const s = this.schedule();
       if (!this.snapshot.connected) this.notice = { tone: 'warning', text: 'Host disconnected · g reconnect before changing schedules.' };
-      else if (s && !s.archived) {
-        const action = data === 'p' ? 'pause' : data === 'r' ? 'run' : 'archive';
+      else if (s) {
+        const action = data === 'p' ? 'pause' : data === 'r' ? 'run' : 'delete-schedule';
         if (action === 'pause') void this.perform(() => this.mutation(action, s.id));
-        else this.confirm(action === 'archive' ? `Archive ${s.name}?\n\nFuture runs stop. Active runs and all history remain available under Archived schedules.` : `Run ${s.name} now with Pi defaults?\n\n${s.mode === 'run-worktree' ? disposal : 'Same-folder concurrency allowed.'}`, () => this.mutation(action, s.id), action === 'archive' ? 'Archive schedule' : 'Run schedule now');
+        else if (action === 'delete-schedule') {
+          const count = this.snapshot.runs.filter(run => run.scheduleId === s.id).length;
+          this.confirm(`Permanently delete ${s.name}?\nSchedule: ${s.id}\n\nThe schedule and all its runs (currently ${count}), conversations and Fire-owned test-perf-artifacts will be deleted. This cannot be undone.\n\nRunning, unconfirmed or incompletely cleaned runs block deletion; resolve them individually first. A partial failure leaves the schedule paused. Source folders, remote PRs and external resources are not deleted.`, () => this.mutation(action, s.id), 'Permanently delete schedule', true);
+        } else this.confirm(`Run ${s.name} now with Pi defaults?\n\n${s.mode === 'run-worktree' ? disposal : 'Same-folder concurrency allowed.'}`, () => this.mutation(action, s.id), 'Run schedule now');
       }
     } else if (data === 'x' || data === 'D' || matchesKey(data, 'shift+d')) {
       const run = this.selectedRun();
       if (!this.snapshot.connected) this.notice = { tone: 'warning', text: 'Host disconnected · g reconnect before controlling runs.' };
-      else if (run) this.confirm(data === 'x' ? `Run: ${run.id}\n\nNative cancellation is requested; no force/PID killing.\n\n${run.config.mode === 'run-worktree' ? disposal : 'Files in the shared folder are not removed.'}` : `Run: ${run.id}\n\nConversation and owned files cannot be recovered.\n\nAny verified residual worktree will be removed, including dirty, staged, untracked and ignored files, with one explicit cleanup attempt.\n\nCleanup or ownership failures retain evidence. No remote PR or external artifact deletion.`, () => this.mutation(data === 'x' ? 'stop' : 'delete', run.id), data === 'x' ? 'Stop run' : 'Permanently delete run', data !== 'x');
+      else if (run) this.confirm(data === 'x' ? `Run: ${run.id}\n\nNative cancellation is requested; no force/PID killing.\n\n${run.config.mode === 'run-worktree' ? disposal : 'Files in the shared folder are not removed.'}` : `Run: ${run.id}\n\nConversation and owned files cannot be recovered.\n\nAny verified residual worktree will be removed, including dirty, staged, untracked and ignored files, with one explicit cleanup attempt.\n\nCleanup or ownership failures retain evidence. Fire-owned test-perf-artifacts are deleted. No remote PR or external resource deletion.`, () => this.mutation(data === 'x' ? 'stop' : 'delete', run.id), data === 'x' ? 'Stop run' : 'Permanently delete run', data !== 'x');
     } else if (halfPage || matchesKey(data, 'up') || matchesKey(data, 'down') || matchesKey(data, 'pageUp') || matchesKey(data, 'pageDown') || matchesKey(data, 'home') || matchesKey(data, 'end') || data === 'j' || data === 'k') {
       const direction = matchesKey(data, 'ctrl+u') || matchesKey(data, 'up') || matchesKey(data, 'pageUp') || matchesKey(data, 'home') || data === 'k' ? -1 : 1;
       const edge = matchesKey(data, 'home') || matchesKey(data, 'end');
@@ -885,8 +897,9 @@ export default function fireExtension(pi: ExtensionAPI) {
     if (ctx.mode === 'tui') ctx.ui.addAutocompleteProvider(current => { autocomplete = current; return current; });
   });
   pi.registerTool({
-    name: 'fire', label: 'Fire', description: 'Optional Fire management (enabled only by /fire tool in this session). list, conversation, preview, save, run, pause, archive, stop, delete. Destructive actions require the same human confirmation as /fire. Output capped at 40KB; use the TUI for full history.',
-    parameters: { type: 'object', properties: { action: { type: 'string', enum: ['list', 'conversation', 'preview', 'save', 'run', 'pause', 'archive', 'stop', 'delete'] }, id: { type: 'string' }, cron: { type: 'string' }, config: { type: 'object', additionalProperties: true } }, required: ['action'] } as const,
+    defaultActive: false,
+    name: 'fire', label: 'Fire', description: 'Optional Fire management (enabled only by /fire tool in this session). list, conversation, preview, save, run, pause, stop, delete (one run), delete-schedule (schedule and all its runs). Deletion includes conversations and Fire-owned test-perf-artifacts; active or unresolved runs block schedule deletion. Destructive actions require the same human confirmation as /fire. Output capped at 40KB; use the TUI for full history.',
+    parameters: { type: 'object', properties: { action: { type: 'string', enum: ['list', 'conversation', 'preview', 'save', 'run', 'pause', 'stop', 'delete', 'delete-schedule'] }, id: { type: 'string' }, cron: { type: 'string' }, config: { type: 'object', additionalProperties: true } }, required: ['action'] } as const,
     async execute(_id, params: any, signal, _update, ctx) {
       if (!enabled || ctx.mode !== 'tui') throw new Error('Fire tool is OFF. Explicit /fire tool in this interactive session is required.');
       params = structuredClone(params);
@@ -935,7 +948,7 @@ export default function fireExtension(pi: ExtensionAPI) {
       if (details?.truncated || output.includes('[truncated; /fire for full read-only history]')) rows.push({ text: 'Response truncated · /fire for full history', tone: 'warning' });
       return {
         render(width) {
-          const hint = keyText('app.tools.expand');
+          const hint = context.keyText('app.tools.expand');
           return [...rows, { text: `${hint ? hint + ' details · ' : ''}/fire history`, tone: 'dim' } as FireToolLine].map(row => truncateToWidth(theme.fg(row.tone, singleLine(row.text)), Math.max(0, width), '…'));
         },
         invalidate() {},

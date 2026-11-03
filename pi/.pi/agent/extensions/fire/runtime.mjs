@@ -100,6 +100,14 @@ function ownedPath(root, path) {
   }
   return path;
 }
+function checkOwnedTree(root, path) {
+  ownedPath(root, path);
+  if (!existsSync(path)) return;
+  for (const name of readdirSync(path)) {
+    const child = ownedPath(root, join(path, name));
+    if (lstatSync(child).isDirectory()) checkOwnedTree(root, child);
+  }
+}
 export function worktreeBranchName(run) {
   // ponytail: ASCII task words keep Worktrunk hostnames portable; use model-based naming if non-Latin-only tasks need descriptive slugs.
   const task = (run.config.name || run.config.prompt).replace(/<skill\b[^>]*>[\s\S]*?<\/skill>/g, '').replace(/^(?:\/skill:\S+\s*)+/, '');
@@ -249,7 +257,12 @@ export class PiWorker {
     } else if (event.type === 'extension_ui_request' && ['select', 'confirm', 'input', 'editor'].includes(event.method)) {
       this.send({ type: 'extension_ui_response', id: event.id, cancelled: true });
     } else if (event.type === 'agent_start') this.settled = false;
-    else if (event.type === 'agent_settled') { this.settled = true; void this.inspect(); }
+    else if (event.type === 'agent_settled') {
+      this.settled = true;
+      this.run.aborted = event.aborted === true;
+      this.onUpdate();
+      void this.inspect();
+    }
     else if (event.type === 'extension_error') {
       this.run.workerError = event.error;
       if (event.extensionPath === 'command:fire-worker-start') this.startError = event.error;
@@ -323,7 +336,11 @@ export class FireHost {
     this.schedulerActive = false; this.schedulerTimer = undefined;
     this.worktrees = worktrees || new Worktrees(this.root);
     this.workerFactory = workerFactory || ((run, onUpdate) => new PiWorker(run, { cli: this.cli, onUpdate }));
-    this.schedules = json(join(this.root, 'schedules.json'), []); this.runs = new Map(); this.live = new Map(); this.next = new Map(); this.deleting = new Set();
+    const savedSchedules = json(join(this.root, 'schedules.json'), []);
+    // Legacy archives become paused schedules, never silently resumed or erased.
+    this.schedules = savedSchedules.map(({ archived, ...schedule }) => archived ? { ...schedule, enabled: false } : schedule);
+    if (savedSchedules.some(schedule => 'archived' in schedule)) this.saveSchedules();
+    this.runs = new Map(); this.live = new Map(); this.next = new Map(); this.deleting = new Set(); this.deletingSchedules = new Set();
     mkdirSync(join(this.root, 'runs'), { recursive: true, mode: 0o700 });
     for (const id of readdirSync(join(this.root, 'runs'))) {
       if (!/^[a-f0-9-]{36}$/.test(id)) continue;
@@ -343,7 +360,7 @@ export class FireHost {
   saveSchedules() { atomicJson(join(this.root, 'schedules.json'), this.schedules); }
   recalculate() {
     this.zone = this.timezone(); this.next.clear();
-    for (const schedule of this.schedules) if (!schedule.archived && schedule.enabled) this.next.set(schedule.id, Date.parse(cronPreview(schedule.cron, this.now(), this.zone, 1)[0]));
+    for (const schedule of this.schedules) if (schedule.enabled) this.next.set(schedule.id, Date.parse(cronPreview(schedule.cron, this.now(), this.zone, 1)[0]));
     this.lastTick = this.now();
     this.scheduleCheck();
   }
@@ -351,7 +368,7 @@ export class FireHost {
   stopScheduler() { this.schedulerActive = false; clearTimeout(this.schedulerTimer); this.schedulerTimer = undefined; }
   scheduleCheck(minDelay = 1) {
     clearTimeout(this.schedulerTimer); this.schedulerTimer = undefined;
-    // No periodic wakeups for an empty, paused, or archived schedule set.
+    // No periodic wakeups for an empty or paused schedule set.
     if (!this.schedulerActive || !this.next.size) return;
     const due = Math.min(...this.next.values());
     // Cron is minute-granular. Bound the wait to detect wall-clock/timezone changes
@@ -373,14 +390,39 @@ export class FireHost {
   }
   saveSchedule(input) {
     const config = validateConfig(input, true); const existing = input.id && this.schedules.find(s => s.id === input.id);
-    if (input.id && (!existing || existing.archived)) throw new Error('Schedule no longer editable');
+    if (input.id && (!existing || this.deletingSchedules.has(input.id))) throw new Error('Schedule no longer editable');
     const schedule = { ...config, id: existing?.id || randomUUID(), updatedAt: this.now() };
     if (existing) this.schedules[this.schedules.indexOf(existing)] = schedule; else this.schedules.push(schedule);
     this.saveSchedules(); this.recalculate(); return schedule;
   }
-  archive(id) {
+  async deleteSchedule(id) {
     const schedule = this.schedules.find(s => s.id === id); if (!schedule) throw new Error('Schedule not found');
-    schedule.archived = true; schedule.enabled = false; this.saveSchedules(); this.recalculate(); return schedule;
+    if (this.deletingSchedules.has(id)) throw new Error('Schedule deletion already in progress');
+    const runs = [...this.runs.values()].filter(run => run.scheduleId === id);
+    // Bulk deletion never stops workers or reconciles failed cleanup on the user's behalf.
+    for (const run of runs) {
+      if (this.live.has(run.id) || this.deleting.has(run.id) || !['terminated', 'skipped'].includes(run.runtime) || !['removed', 'not-required', 'not-created'].includes(run.cleanup) || (run.worktree && (run.cleanup !== 'removed' || existsSync(run.worktree.path)))) {
+        throw new Error(`MANUAL: resolve run ${run.id} before deleting this schedule; no changes made`);
+      }
+      for (const path of this.runRecordPaths(run.id)) checkOwnedTree(this.root, path);
+    }
+    this.deletingSchedules.add(id);
+    try {
+      // Persist the pause first so a crash or partial failure cannot schedule more work.
+      this.schedules = this.schedules.map(s => s.id === id ? { ...s, enabled: false } : s);
+      this.recalculate(); this.saveSchedules();
+      for (const run of runs) await this.deleteRun(run.id);
+      const remaining = this.schedules.filter(s => s.id !== id);
+      atomicJson(join(this.root, 'schedules.json'), remaining);
+      this.schedules = remaining; this.recalculate();
+      return { deletedSchedule: id, deletedRuns: runs.length };
+    } catch (e) {
+      throw new Error(`Schedule deletion incomplete; schedule remains paused in memory. Inspect storage before restarting; some history may already be deleted. ${errorText(e)}`);
+    } finally { this.deletingSchedules.delete(id); }
+  }
+  runRecordPaths(id) {
+    // Only fixed run-owned buckets, never arbitrary paths from prompts or metadata.
+    return [join(this.root, 'test-perf-artifacts', id), join(this.root, 'runs', id)].map(path => ownedPath(this.root, path));
   }
   tick() {
     const now = this.now();
@@ -395,6 +437,7 @@ export class FireHost {
     this.lastTick = now;
   }
   accept(input, scheduleId, skipped) {
+    if (scheduleId && (this.deletingSchedules.has(scheduleId) || !this.schedules.some(s => s.id === scheduleId))) throw new Error('Schedule unavailable or being deleted');
     const config = validateConfig(input, Boolean(scheduleId), !scheduleId);
     const worktreeRoot = join(this.root, 'worktrees');
     if (config.cwd === worktreeRoot || config.cwd.startsWith(worktreeRoot + sep)) throw new Error('Fire runs cannot use a disposable Fire worktree as their original folder');
@@ -486,10 +529,11 @@ export class FireHost {
     }
     if (run.cleanup === 'manual' || run.cleanup === 'removing') throw new Error('MANUAL: reconcile failed cleanup/resources before deleting evidence.');
     if (run.worktree && existsSync(run.worktree.path)) throw new Error('MANUAL: worktree path exists again; evidence retained');
-    const path = ownedPath(this.root, join(this.root, 'runs', id));
-    // Never follow session/report paths from metadata: delete only this owned, symlink-free bucket.
-    const check = dir => { for (const name of readdirSync(dir)) { const p = ownedPath(this.root, join(dir, name)); if (lstatSync(p).isDirectory()) check(p); } };
-    check(path); rmSync(path, { recursive: true }); this.runs.delete(id); return { deleted: id };
+    const paths = this.runRecordPaths(id);
+    for (const path of paths) checkOwnedTree(this.root, path);
+    // Artifacts first: retain run metadata if their removal fails.
+    for (const path of paths) if (existsSync(path)) rmSync(path, { recursive: true });
+    this.runs.delete(id); return { deleted: id };
     } finally { this.deleting.delete(id); }
   }
   conversation(id) {
@@ -508,9 +552,9 @@ export class FireHost {
       case 'list': return this.list();
       case 'preview': return cronPreview(request.cron, this.now(), this.timezone());
       case 'save': return this.saveSchedule(request.config);
-      case 'archive': return this.archive(request.id);
-      case 'pause': { const s = this.schedules.find(s => s.id === request.id); if (!s || s.archived) throw new Error('Schedule not found'); return this.saveSchedule({ ...s, enabled: !s.enabled }); }
-      case 'run': { if (request.id) { const s = this.schedules.find(s => s.id === request.id); if (!s || s.archived) throw new Error('Schedule not found'); return this.accept(s, s.id); } return this.accept(request.config); }
+      case 'delete-schedule': return this.deleteSchedule(request.id);
+      case 'pause': { const s = this.schedules.find(s => s.id === request.id); if (!s) throw new Error('Schedule not found'); return this.saveSchedule({ ...s, enabled: !s.enabled }); }
+      case 'run': { if (request.id) { const s = this.schedules.find(s => s.id === request.id); if (!s) throw new Error('Schedule not found'); return this.accept(s, s.id); } return this.accept(request.config); }
       case 'stop': return this.stop(request.id);
       case 'delete': return this.deleteRun(request.id, request.manualCleanupVerified === true);
       case 'conversation': return this.conversation(request.id);
