@@ -170,12 +170,18 @@ export default function tmuxNotifyExtension(pi: ExtensionAPI) {
     await clearNoticeIfOwned(pi, pane, token);
   });
 
-  pi.on("agent_settled", async (_event, ctx) => {
+  pi.on("agent_settled", async (event, ctx) => {
     if (!pane || ctx.mode !== "tui" || !ctx.isIdle()) return;
 
     const startedAt = runStartedAt;
-    if (startedAt === undefined) return;
     runStartedAt = undefined;
+    if (event.aborted) {
+      inputNoticeTokens.clear();
+      await clearCurrentNotice();
+      await setDoneBadge(pi, pane, false);
+      return;
+    }
+    if (startedAt === undefined) return;
 
     const elapsedMs = Date.now() - startedAt;
     const location = await getTmuxLocation(pi, pane);
