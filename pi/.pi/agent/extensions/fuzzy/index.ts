@@ -3,7 +3,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { spawn } from "node:child_process";
 import { showFuzzyFilePicker } from "./file-picker.js";
 import { existsSync } from "node:fs";
-import { readdir } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
 interface FuzzyFindInput {
@@ -47,7 +47,7 @@ const fuzzyFindParameters = {
     },
     path: {
       type: "string",
-      description: "Optional directory or file scope, e.g. 'src/' or 'agent/extensions'.",
+      description: "Optional directory or file to search. Accepts absolute paths or paths relative to the current working directory.",
     },
     limit: {
       type: "number",
@@ -78,16 +78,9 @@ function formatScopeForUi(scope: string | undefined, theme: any): string {
 
 function normalizeToolPath(cwd: string, value: string | undefined): string | undefined {
   const stripped = value?.trim().replace(/^@/, "");
-  if (!stripped || stripped === ".") return undefined;
+  if (!stripped) return undefined;
 
-  const absolutePath = path.isAbsolute(stripped) ? stripped : path.resolve(cwd, stripped);
-  const relativePath = path.relative(cwd, absolutePath);
-
-  if (relativePath && !relativePath.startsWith("..") && !path.isAbsolute(relativePath)) {
-    return toPosixPath(relativePath).replace(/\/$/, "");
-  }
-
-  return toPosixPath(stripped).replace(/^\.\//, "").replace(/\/$/, "");
+  return toPosixPath(path.relative(cwd, path.resolve(cwd, stripped))) || undefined;
 }
 
 function isIgnoredWalkDir(relativePath: string): boolean {
@@ -232,8 +225,12 @@ export default function (pi: ExtensionAPI) {
 
       const limit = clampLimit(params.limit);
       const scope = normalizeToolPath(ctx.cwd, params.path);
-      const allFiles = await listFiles(pi, ctx.cwd, signal);
-      const files = scopedFiles(allFiles, scope);
+      const searchPath = path.resolve(ctx.cwd, scope ?? ".");
+      const isDirectory = (await stat(searchPath)).isDirectory();
+      const searchCwd = isDirectory ? searchPath : path.dirname(searchPath);
+      const allFiles = await listFiles(pi, searchCwd, signal);
+      const files = scopedFiles(allFiles, isDirectory ? undefined : path.basename(searchPath))
+        .map((file) => toPosixPath(path.relative(ctx.cwd, path.join(searchCwd, file))));
 
       if (files.length === 0) {
         return {

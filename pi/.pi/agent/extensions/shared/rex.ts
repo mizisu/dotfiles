@@ -14,12 +14,12 @@ export type RexBounds = [number, number, number, number];
 const POPUP_BOUNDS: RexBounds = [0.025, 0.05, 0.95, 0.9];
 
 export function isRex(): boolean {
-  return Boolean(process.env.REX_SESSION && process.env.REX_BLOCK && !process.env.TMUX && !process.env.STY);
+  return Boolean(process.env.REX_SESSION && process.env.REX_BLOCK && !process.env.STY);
 }
 
-export function rexCall<T = unknown>(method: string, session: string, args: Record<string, unknown> = {}): T {
+export function rexCall<T = unknown>(method: string, session?: string, args: Record<string, unknown> = {}): T {
   const result = spawnSync("rex", ["--autostart=false", "--timeout", "3s", "api", "call", method, "-"], {
-    input: JSON.stringify({ ...args, session_id: session }),
+    input: JSON.stringify(session ? { ...args, session_id: session } : args),
     encoding: "utf-8",
     timeout: 5_000,
     maxBuffer: 2 * 1024 * 1024,

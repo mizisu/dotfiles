@@ -6,7 +6,7 @@ import { SessionManager, type ExtensionAPI, type ExtensionContext } from "@earen
 import { matchesKey } from "@earendil-works/pi-tui";
 import { createRexFloat, rexBlocks, rexCall, showRexBlock, type RexBlock, type RexBounds } from "./rex.js";
 
-const TOOLS = ["read", "grep", "find", "ls"];
+const BLOCKED_TOOLS = ["edit", "write"];
 const BOUNDS: RexBounds = [0.48, 0.1, 0.5, 0.8];
 type Host = {
   session: string;
@@ -63,7 +63,8 @@ export function rexSideExtension(pi: ExtensionAPI, extensionPath: string): void 
   function create(ctx: ExtensionContext, current: Host): void {
     const all = panes(current);
     const id = Number(all.at(-1)?.label?.slice(prefix(current).length) ?? 0) + 1;
-    const args = ["--no-extensions", "-e", extensionPath, "--tools", TOOLS.join(","), "--name", `Side #${id}`,
+    const args = ["-e", extensionPath, "--tools", "+read,+bash,+grep,+find,+ls",
+      "--exclude-tools", BLOCKED_TOOLS.join(","), "--name", `Side #${id}`,
       ctx.isProjectTrusted() ? "--approve" : "--no-approve"];
     let fork: string | undefined;
     if (current.sourceSession && current.leaf && existsSync(current.sourceSession)) {
@@ -117,14 +118,11 @@ export function rexSideExtension(pi: ExtensionAPI, extensionPath: string): void 
     pi.registerShortcut("ctrl+shift+tab", { description: "Previous Side Chat", handler: (ctx) => cycle(ctx, -1) });
     pi.registerShortcut("ctrl+n", { description: "New Side Chat", handler: (ctx) => guard(ctx, (current) => create(ctx, current)) });
     pi.on("tool_call", (event) => {
-      if (!TOOLS.includes(event.toolName)) return { block: true, reason: "Side Chat is read-only" };
+      if (BLOCKED_TOOLS.includes(event.toolName)) return { block: true, reason: "Side Chat disables edit/write tools" };
     });
-    pi.on("user_bash", () => ({ result: {
-      output: "Side Chat is read-only; user bash is disabled.", exitCode: 1, cancelled: false, truncated: false,
-    } }));
   } else {
     pi.registerCommand("side", {
-      description: "Open a read-only Rex Side Chat. /side clean removes this session's chats.",
+      description: "Open a Rex Side Chat with edit/write disabled. /side clean removes this session's chats.",
       handler: async (args, ctx) => {
         if (args.trim() === "clean") {
           try { clean(); ctx.ui.notify("side chats cleaned", "info"); }

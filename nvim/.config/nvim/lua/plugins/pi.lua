@@ -1,16 +1,3 @@
-local function run(args)
-  local result = vim.system(args, { text = true }):wait()
-  if result.code == 0 then
-    return vim.trim(result.stdout)
-  end
-
-  local message = vim.trim(result.stderr ~= "" and result.stderr or result.stdout)
-  if message == "" then
-    message = table.concat(args, " ")
-  end
-  return nil, message
-end
-
 local function buffer_path()
   local absolute_path = vim.api.nvim_buf_get_name(0)
   if absolute_path == "" then
@@ -19,45 +6,6 @@ local function buffer_path()
   end
 
   return vim.fn.fnamemodify(absolute_path, ":p")
-end
-
-local function target_pane()
-  if vim.env.TMUX == nil or vim.env.TMUX == "" or vim.env.TMUX_PANE == nil or vim.env.TMUX_PANE == "" then
-    return nil, "Not running inside tmux"
-  end
-
-  local window_id, err = run({ "tmux", "display-message", "-p", "-t", vim.env.TMUX_PANE, "#{window_id}" })
-  if not window_id then
-    return nil, err
-  end
-
-  local output
-  output, err = run({ "tmux", "list-panes", "-t", window_id, "-F", "#{pane_id}\t#{pane_last}\t#{pane_dead}" })
-  if not output then
-    return nil, err
-  end
-
-  local candidates = {}
-  local last_candidates = {}
-  for line in vim.gsplit(output, "\n", { plain = true, trimempty = true }) do
-    local pane_id, pane_last, pane_dead = line:match("([^\t]+)\t([^\t]+)\t([^\t]+)")
-    if pane_id and pane_id ~= vim.env.TMUX_PANE and pane_dead == "0" then
-      table.insert(candidates, pane_id)
-      if pane_last == "1" then
-        table.insert(last_candidates, pane_id)
-      end
-    end
-  end
-
-  if #candidates == 1 then
-    return candidates[1]
-  end
-
-  if #last_candidates == 1 then
-    return last_candidates[1]
-  end
-
-  return nil, "Could not determine target pane in the current tmux window"
 end
 
 local function send_to_rex(reference)
@@ -113,39 +61,12 @@ local function send_to_pi(reference, append_space)
     reference = reference .. " "
   end
 
-  if require("config.rex").active() then
-    send_to_rex(reference)
+  if not require("config.rex").active() then
+    vim.notify("Sending to Pi requires Rex", vim.log.levels.ERROR)
     return
   end
 
-  local pane_id, err = target_pane()
-  if not pane_id then
-    vim.notify(err, vim.log.levels.ERROR)
-    return
-  end
-
-  local buf_name = string.format("pi_send_%d", vim.fn.getpid())
-  local _, message = run({ "tmux", "set-buffer", "-b", buf_name, "--", reference })
-  if message ~= nil then
-    vim.notify(message, vim.log.levels.ERROR)
-    return
-  end
-
-  local pane_in_mode = run({ "tmux", "display-message", "-p", "-t", pane_id, "#{pane_in_mode}" })
-  if pane_in_mode == "1" then
-    run({ "tmux", "send-keys", "-t", pane_id, "-X", "cancel" })
-  end
-
-  _, message = run({ "tmux", "paste-buffer", "-p", "-d", "-b", buf_name, "-t", pane_id })
-  if message ~= nil then
-    vim.notify(message, vim.log.levels.ERROR)
-    return
-  end
-
-  _, message = run({ "tmux", "select-pane", "-t", pane_id })
-  if message ~= nil then
-    vim.notify(message, vim.log.levels.ERROR)
-  end
+  send_to_rex(reference)
 end
 
 local function visual_line_range()

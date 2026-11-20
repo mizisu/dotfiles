@@ -9,7 +9,7 @@ import { Container, getCapabilities, hyperlink, Image, Spacer, Text } from "@ear
 
 const PROVIDER = "openai-codex";
 const DEFAULT_OPTIONS = {
-  model: "gpt-image-2.5-flare",
+  model: "gpt-image-2.6-flare",
   quality: "auto",
   size: "1024x1024",
   n: 1,
@@ -28,6 +28,16 @@ type ImagePreview = {
   theme?: Theme;
   width?: number;
 };
+
+class PreviewGroup extends Container {}
+
+function isGeneratedPath(path: unknown): path is string {
+  return typeof path === "string" && /^\/tmp\/pi-image-[a-zA-Z0-9]{6}\/image\.png$/.test(path);
+}
+
+function asRecord(value: unknown) {
+  return typeof value === "object" && value !== null ? value as Record<string, unknown> : undefined;
+}
 
 // Load only into renderer state, never into tool content or persisted details.
 async function readPreview(path: string): Promise<string> {
@@ -76,6 +86,7 @@ export default function codexImageExtension(pi: ExtensionAPI) {
   let enabled = false;
   let tuiActive = false;
   let uiGeneration = 0;
+  const nestedPaths = new Map<string, string[]>();
 
   function setEnabled(value: boolean) {
     enabled = value;
@@ -91,7 +102,94 @@ export default function codexImageExtension(pi: ExtensionAPI) {
   pi.on("session_shutdown", () => {
     setEnabled(false);
     tuiActive = false;
+    nestedPaths.clear();
     uiGeneration++;
+  });
+
+  function renderPreview(path: string, theme: Theme, context: {
+    state: { codexImagePreviews?: Map<string, ImagePreview> };
+    showImages: boolean;
+    invalidate(): void;
+  }) {
+    const text = new Text(getCapabilities().hyperlinks
+      ? hyperlink(theme.fg("accent", theme.underline(path)), pathToFileURL(path).href)
+      : path, 0, 0);
+    if (!tuiActive || !context.showImages || !getCapabilities().images) return text;
+
+    const previews = context.state.codexImagePreviews ??= new Map<string, ImagePreview>();
+    let preview = previews.get(path);
+    if (!preview) {
+      const loading: ImagePreview = { path };
+      previews.set(path, loading);
+      preview = loading;
+      const generation = uiGeneration;
+      void readPreview(path).then(
+        (data) => { loading.data = data; },
+        () => { loading.unavailable = true; },
+      ).then(() => {
+        if (tuiActive && generation === uiGeneration) context.invalidate();
+      });
+    }
+    const container = new Container();
+    container.addChild(text);
+    if (preview.data) {
+      const width = pi.getSettings().terminal?.imageWidthCells ?? 60;
+      if (!preview.image || preview.theme !== theme || preview.width !== width) {
+        preview.image = new Image(preview.data, "image/png", { fallbackColor: (value) => theme.fg("muted", value) }, {
+          filename: path,
+          maxWidthCells: width,
+          maxHeightCells: 24,
+        });
+        preview.theme = theme;
+        preview.width = width;
+      }
+      container.addChild(new Spacer(1));
+      container.addChild(preview.image);
+    } else {
+      container.addChild(new Text(theme.fg("dim", preview.unavailable ? "[Preview unavailable; open the path above]" : "[Loading preview…]"), 0, 0));
+    }
+    return container;
+  }
+
+  // Nested tool results have no transcript row. Attach only their local paths to
+  // the parent result's UI details; never add PNG data to either tool's content.
+  pi.on("tool_result", (event) => {
+    if (!tuiActive) return;
+    const paths = nestedPaths.get(event.toolCallId);
+    nestedPaths.delete(event.toolCallId);
+    if (event.toolName === "codemode" && paths?.length) {
+      return { details: { ...asRecord(event.details), codexImagePaths: paths } };
+    }
+    if (event.toolName === TOOL && event.parentToolCallId && !event.isError) {
+      const path = asRecord(event.details)?.path;
+      if (!isGeneratedPath(path)) return;
+      const siblings = nestedPaths.get(event.parentToolCallId) ?? [];
+      siblings.push(path);
+      nestedPaths.set(event.parentToolCallId, siblings);
+    }
+  });
+
+  pi.registerToolRenderer((name, next) => {
+    const original = next();
+    if (name !== "codemode" || !original?.renderResult) return original;
+    const renderResult = original.renderResult;
+    return {
+      ...original,
+      renderResult(result, options, theme, context) {
+        const previous = context.lastComponent;
+        const output = renderResult(result, options, theme, previous instanceof PreviewGroup
+          ? { ...context, lastComponent: previous.children[0] } : context);
+        const paths = result.details?.codexImagePaths;
+        if (!tuiActive || options.isPartial || !Array.isArray(paths)) return output;
+        const group = new PreviewGroup();
+        group.addChild(output);
+        for (const path of paths.filter(isGeneratedPath)) {
+          group.addChild(new Spacer(1));
+          group.addChild(renderPreview(path, theme, context));
+        }
+        return group;
+      },
+    };
   });
 
   pi.registerCommand("image", {
@@ -117,11 +215,11 @@ export default function codexImageExtension(pi: ExtensionAPI) {
       "Compose a self-contained visual prompt from the relevant conversation; exclude credentials, unrelated private information, and raw conversation logs.",
       "Only the tool result is restricted to a file path, not your final response. Explain the outcome and continue the user's task as needed.",
       "The TUI already displays the generated file path and image preview. Do not repeat the path or add an image link in your final response unless the user asks.",
-      "The local preview is not sent to the model. Do not call read on the image unless the user asks you to inspect it.",
+      "In codemode, return only the path from tools.generate_image(). The TUI renders the PNG locally. Never call image() or read the file for a preview; only read it if the user explicitly wants the model to inspect it.",
       "Do not automatically retry a failed or timed-out generation: the request may already have consumed quota. Honor the requested model; do not silently switch models on failure.",
     ],
     parameters: Type.Object({
-      model: Type.Optional(StringEnum([DEFAULT_OPTIONS.model, "gpt-image-2.5-sunburst"] as const, { description: "Image model for this call. Defaults to gpt-image-2.5-flare; select gpt-image-2.5-sunburst when requested." })),
+      model: Type.Optional(StringEnum([DEFAULT_OPTIONS.model, "gpt-image-2.6-sunburst"] as const, { description: "Image model for this call. Defaults to gpt-image-2.6-flare; select gpt-image-2.6-sunburst when requested." })),
       prompt: Type.String({ minLength: 1, maxLength: 32000, description: "Self-contained image description based on the conversation and user's image request." }),
       quality: Type.Optional(StringEnum(["low", "medium", "high", "auto"] as const, { description: "Requested quality; defaults to auto. The Codex backend may override it." })),
     }),
@@ -213,46 +311,10 @@ export default function codexImageExtension(pi: ExtensionAPI) {
       return text;
     },
     renderResult(result, _options, theme, context) {
-      const text = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
       const path = result.details?.path;
+      if (!context.isError && !context.isPartial && isGeneratedPath(path)) return renderPreview(path, theme, context);
       const output = result.content.filter((item) => item.type === "text").map((item) => item.text).join("\n");
-      text.setText(!context.isError && path && getCapabilities().hyperlinks
-        ? hyperlink(theme.fg("accent", theme.underline(path)), pathToFileURL(path).href)
-        : output);
-      if (!tuiActive || context.isError || context.isPartial || !path || !context.showImages || !getCapabilities().images) return text;
-
-      const state = context.state as { preview?: ImagePreview };
-      if (state.preview?.path !== path) {
-        const preview: ImagePreview = { path };
-        state.preview = preview;
-        const generation = uiGeneration;
-        void readPreview(path).then(
-          (data) => { preview.data = data; },
-          () => { preview.unavailable = true; },
-        ).then(() => {
-          if (tuiActive && generation === uiGeneration && state.preview === preview) context.invalidate();
-        });
-      }
-      const preview = state.preview;
-      const container = new Container();
-      container.addChild(text);
-      if (preview.data) {
-        const width = pi.getSettings().terminal?.imageWidthCells ?? 60;
-        if (!preview.image || preview.theme !== theme || preview.width !== width) {
-          preview.image = new Image(preview.data, "image/png", { fallbackColor: (value) => theme.fg("muted", value) }, {
-            filename: path,
-            maxWidthCells: width,
-            maxHeightCells: 24,
-          });
-          preview.theme = theme;
-          preview.width = width;
-        }
-        container.addChild(new Spacer(1));
-        container.addChild(preview.image);
-      } else {
-        container.addChild(new Text(theme.fg("dim", preview.unavailable ? "[Preview unavailable; open the path above]" : "[Loading preview…]"), 0, 0));
-      }
-      return container;
+      return new Text(output, 0, 0);
     },
   }));
 }

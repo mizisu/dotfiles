@@ -15,8 +15,11 @@
 
 # Output
 
-- Mermaid diagrams: use English labels.
+- Create documents in the current working directory unless the user requests a different location.
+- Do not use the middle dot character (U+00B7) in responses.
+- Mermaid diagrams: use English labels by default; use another language when requested.
 - Do not use "# ponytail:" comments
+- When using the grilling skill, use `ask_user` for decision questions and final confirmation instead of its Markdown question format.
 
 # GitHub
 

@@ -1,10 +1,10 @@
 {
   "$schema": "https://pi.dev/schemas/settings.schema.json",
-  "lastChangelogVersion": "1.5.0",
+  "lastChangelogVersion": "1.5.2",
   "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-6-astra",
+  "defaultModel": "gpt-6.2-astra",
   "mediumProvider": "openai-codex",
-  "mediumModel": "gpt-6.1-sol",
+  "mediumModel": "gpt-6.2-sol",
   "smallProvider": "openai-codex",
   "smallModel": "gpt-6-luna",
   "theme": "catppuccin-macchiato",
@@ -14,9 +14,9 @@
     "+codemode"
   ],
   "enabledModels": [
-    "openai-codex/gpt-6-astra",
-    "openai-codex/gpt-6.1-sol",
-    "openai-codex/gpt-6-luna"
+    "openai-codex/gpt-6-luna",
+    "openai-codex/gpt-6.2-astra",
+    "openai-codex/gpt-6.2-sol"
   ],
   "subagents": {
     "agentOverrides": {
@@ -24,22 +24,22 @@
         "model": "openai-codex/gpt-6-luna"
       },
       "worker": {
-        "model": "openai-codex/gpt-6.1-sol"
+        "model": "openai-codex/gpt-6.2-sol"
       },
       "reviewer": {
-        "model": "openai-codex/gpt-6.1-sol"
+        "model": "openai-codex/gpt-6.2-sol"
       },
       "delegate": {
-        "model": "openai-codex/gpt-6.1-sol"
+        "model": "openai-codex/gpt-6.2-sol"
       },
       "researcher": {
-        "model": "openai-codex/gpt-6.1-sol"
+        "model": "openai-codex/gpt-6.2-sol"
       },
       "evidence-auditor": {
-        "model": "openai-codex/gpt-6-astra"
+        "model": "openai-codex/gpt-6.2-astra"
       },
       "oracle": {
-        "model": "openai-codex/gpt-6-astra"
+        "model": "openai-codex/gpt-6.2-astra"
       }
     }
   },
@@ -55,9 +55,9 @@
     "-builtin:mcp"
   ],
   "packages": [
-    "https://github.com/davebcn87/pi-autoresearch",
     "npm:pi-web-access",
-    "npm:pi-subagents"
+    "npm:pi-subagents",
+    "npm:pi-better"
   ],
   "compaction": {
     "enabled": true
@@ -73,7 +73,8 @@
   "collapseChangelog": true,
   "extensionChangelogVersions": {
     "{\"source\":\"https://github.com/davebcn87/pi-autoresearch\",\"scope\":\"user\"}": "1.9.0",
-    "{\"source\":\"npm:pi-web-access\",\"scope\":\"user\"}": "0.46.0",
-    "{\"source\":\"npm:pi-subagents\",\"scope\":\"user\"}": "0.84.0"
+    "{\"source\":\"npm:pi-web-access\",\"scope\":\"user\"}": "0.47.0",
+    "{\"source\":\"npm:pi-subagents\",\"scope\":\"user\"}": "0.88.0",
+    "{\"source\":\"npm:pi-better\",\"scope\":\"user\"}": "0.2.0"
   }
 }

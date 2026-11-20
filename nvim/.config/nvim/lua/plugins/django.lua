@@ -28,7 +28,7 @@ return {
     env_file = ".env", -- file to load DJANGO_SETTINGS_MODULE from, false to disable
   },
 
-  dir = "/Users/charles/Desktop/src/django.nvim",
+  dir = "/Users/charles/Desktop/src/archive/django.nvim",
   config = function()
     require("django").setup()
   end,

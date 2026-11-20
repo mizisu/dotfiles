@@ -1,7 +1,7 @@
 require("preferences")
 require("workflows")
 
--- Match tmux: Alt+1..9 selects the corresponding tab in either input source.
+-- Alt+1..9 selects the corresponding tab in either input source.
 for index = 1, 9 do
   rex.bind("alt+[Digit" .. index .. "]", "client.tab.goto", { index = index })
 end
@@ -45,10 +45,10 @@ for key, direction in pairs({ H = "left", J = "down", K = "up", L = "right" }) d
     local process = rex.block.call("com.superlogical.terminal", "process", { block_id = ctx.block_id })
     local foreground = process and process.foreground or {}
     local name = (foreground.script or foreground.argv0 or foreground.name or ""):match("([^/]+)$")
-    if name == "nvim" or name == "vim" or name == "tmux" then return false end
+    if name == "nvim" or name == "vim" then return false end
     if name == "rit" and key == "L" then return false end
     if name == "rit" and key == "H" then
-      -- Like rit's tmux integration, distinguish Ctrl+H from Backspace.
+      -- Distinguish Ctrl+H from Backspace for rit's review shortcut.
       assert(rex.block.call("com.superlogical.terminal", "write", {
         block_id = ctx.block_id, data = "\27[104;5u",
       }))

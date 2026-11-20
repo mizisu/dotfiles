@@ -1,8 +1,8 @@
 import { type Message, uuidv7 } from "@earendil-works/pi-ai";
 import { convertToLlm, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
-import { open, stat, unlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { copyFile, mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { resolveSmallModel } from "./shared/model-slots.js";
 import { createCommandWorking } from "./shared/command-working.js";
@@ -12,16 +12,23 @@ const MAX_DIFF_CHARS = 180_000;
 const MAX_SESSION_CONTEXT_CHARS = 8_000;
 const MAX_COMMIT_STYLE_CHARS = 12_000;
 const MAX_COMMIT_STYLE_EXAMPLES = 20;
-const MAX_UNTRACKED_FILE_BYTES = 24_000;
-const MAX_UNTRACKED_TOTAL_BYTES = 90_000;
 const MAX_SUBJECT_LENGTH = 120;
 
+// Planning and staging must use the same patch format, regardless of user diff settings.
+const DIFF_ARGS = [
+  "-c", "core.quotePath=false", "diff", "--no-ext-diff", "--no-color", "--no-textconv",
+  "--src-prefix=a/", "--dst-prefix=b/", "--no-relative", "--unified=3", "--inter-hunk-context=0",
+];
+
+// Start each exclusion with a wildcard: git add reports explicitly named
+// ignored files (or directory prefixes) as errors even in negative pathspecs.
 const SENSITIVE_EXCLUDE_PATHS = [
-  ":(exclude).env",
-  ":(exclude).env.*",
-  ":(exclude)**/.env",
-  ":(exclude)**/.env.*",
-  ":(exclude)agent/auth.json",
+  ":(exclude,glob)**/.env",
+  ":(exclude,glob)**/.env/**",
+  ":(exclude,glob)**/.env.*",
+  ":(exclude,glob)**/.env.*/**",
+  ":(exclude,glob)[a]gent/auth.json",
+  ":(exclude,glob)[a]gent/auth.json/**",
 ];
 
 const PLAN_SYSTEM_PROMPT = `You create a safe git commit plan for an existing working tree.
@@ -56,6 +63,8 @@ Rules:
 - Prefer fewer safe commits over many brittle commits.
 - Use "all" for whole-file changes.
 - Use hunk index arrays only when one file contains clearly independent changes.
+- Assign each hunk to exactly one commit; never mix "all" and hunk selections for the same file.
+- New, deleted, renamed, binary, and mode-changed files must use "all" in exactly one commit.
 - Include all listed non-sensitive changed files exactly where they belong.
 - The git diff/status is the source of truth; session context is only a hint.
 - Do not invent files or changes not present in the input.`;
@@ -74,6 +83,7 @@ interface DiffFile {
   header: string;
   hunks: Hunk[];
   binary: boolean;
+  wholeFileOnly: boolean;
 }
 
 interface PlanCommit {
@@ -82,10 +92,42 @@ interface PlanCommit {
   files: Record<string, FileSpec>;
 }
 
-interface UntrackedPreview {
-  path: string;
-  preview: string;
-  note?: string;
+interface HeadState {
+  commit?: string;
+  ref?: string;
+}
+
+interface CommitSandbox {
+  directory: string;
+  indexFile: string;
+  stateIndexFile: string;
+  snapshotIndexFile: string;
+  realIndexFile: string;
+}
+
+interface CommitSnapshot {
+  head: HeadState;
+  baseTree: string;
+  targetTree: string;
+  indexTree: string;
+}
+
+interface PreparedCommit {
+  commit: PlanCommit;
+  tree: string;
+}
+
+interface CommitRun {
+  sandbox: CommitSandbox;
+  snapshot: CommitSnapshot;
+  head: HeadState;
+  indexTree: string;
+}
+
+interface StageSource {
+  indexFile?: string;
+  base?: string;
+  target?: string;
 }
 
 interface PushSummary {
@@ -114,17 +156,6 @@ function isSensitivePath(value: string): boolean {
   if (!path) return true;
   if (path === "agent/auth.json") return true;
   return path.split("/").some((part) => part === ".env" || part.startsWith(".env."));
-}
-
-function isProbablyText(buffer: Buffer): boolean {
-  if (buffer.length === 0) return true;
-  if (buffer.includes(0)) return false;
-  const sample = buffer.subarray(0, Math.min(buffer.length, 4000));
-  let control = 0;
-  for (const byte of sample) {
-    if (byte < 32 && byte !== 9 && byte !== 10 && byte !== 13) control++;
-  }
-  return control / sample.length < 0.02;
 }
 
 function truncateText(value: string, maxChars: number, note = "[truncated]"): string {
@@ -212,7 +243,7 @@ function unquoteDiffPath(value: string): string {
 }
 
 function parseDiffHeaderPath(line: string): { oldPath: string; newPath: string } | undefined {
-  const match = line.match(/^diff --git (.+) (.+)$/);
+  const match = line.match(/^diff --git ("(?:\\.|[^"])*"|.+?) ("(?:\\.|[^"])*"|b\/.+)$/);
   if (!match) return undefined;
 
   const oldRaw = unquoteDiffPath(match[1]).replace(/^a\//, "");
@@ -232,6 +263,16 @@ function parseDiff(raw: string): DiffFile[] {
     const paths = parseDiffHeaderPath(firstLine);
     if (!paths) continue;
 
+    // ---/+++ are unambiguous even when a path itself contains " b/".
+    for (const [prefix, key] of [["---", "oldPath"], ["+++", "newPath"]] as const) {
+      const marker = chunk.split("\n").find((line) => line.startsWith(`${prefix} `));
+      if (!marker) continue;
+      const rawPath = unquoteDiffPath(marker.slice(4).split("\t", 1)[0]);
+      if (rawPath === "/dev/null") continue;
+      const path = normalizeGitPath(rawPath.replace(/^[ab]\//, ""));
+      if (path) paths[key] = path;
+    }
+
     const deleted = /^deleted file mode /m.test(chunk);
     const path = deleted ? paths.oldPath : paths.newPath;
     const parts = chunk.split(/(?=^@@ )/m);
@@ -239,10 +280,8 @@ function parseDiff(raw: string): DiffFile[] {
 
     for (let index = 1; index < parts.length; index++) {
       const body = parts[index];
-      const fingerprint = body
-        .split("\n")
-        .filter((line) => (line.startsWith("+") || line.startsWith("-")) && !line.startsWith("+++") && !line.startsWith("---"))
-        .join("\n");
+      // Ignore line offsets, but keep context and EOF markers to identify the location.
+      const fingerprint = body.slice(body.indexOf("\n") + 1);
       hunks.push({ index: index - 1, body, fingerprint });
     }
 
@@ -252,32 +291,23 @@ function parseDiff(raw: string): DiffFile[] {
       header: parts[0],
       hunks,
       binary: /Binary files .* differ|GIT binary patch/m.test(chunk),
+      wholeFileOnly: paths.oldPath !== paths.newPath
+        || /^(?:new file mode |deleted file mode |old mode |new mode |Binary files |GIT binary patch)/m.test(chunk),
     });
   }
   return files.filter((file) => !isSensitivePath(file.path) && !isSensitivePath(file.oldPath));
 }
 
-function formatDiffForModel(files: DiffFile[], untracked: UntrackedPreview[]): string {
+function formatDiffForModel(files: DiffFile[]): string {
   const sections: string[] = [];
   for (const file of files) {
     let text = file.header;
-    if (file.binary) text += "[binary file: stage only as whole file]\n";
+    if (file.wholeFileOnly) text += "[structural or binary change: stage only as whole file]\n";
     for (const hunk of file.hunks) text += `[hunk ${hunk.index}]\n${hunk.body}`;
     sections.push(text.trimEnd());
   }
 
-  for (const item of untracked) {
-    sections.push(`--- untracked file: ${item.path}${item.note ? ` (${item.note})` : ""} ---\n${item.preview}`.trimEnd());
-  }
-
   return truncateText(sections.join("\n\n"), MAX_DIFF_CHARS, "[diff truncated; rely on status for full file list]");
-}
-
-function parseNulList(stdout: string): string[] {
-  return stdout
-    .split("\0")
-    .map((item) => normalizeGitPath(item))
-    .filter((item): item is string => !!item && !isSensitivePath(item));
 }
 
 function parseStatusPaths(stdout: string): string[] {
@@ -296,49 +326,6 @@ function parseSensitiveStatusPaths(stdout: string): string[] {
     .map((item) => item.includes(" -> ") ? item.split(" -> ").at(-1)! : item)
     .map((item) => normalizeGitPath(item))
     .filter((item): item is string => !!item && isSensitivePath(item));
-}
-
-async function readUntrackedPreviews(root: string, files: string[]): Promise<UntrackedPreview[]> {
-  const previews: UntrackedPreview[] = [];
-  let totalBytes = 0;
-
-  for (const file of files) {
-    if (isSensitivePath(file)) continue;
-    const fullPath = join(root, file);
-    try {
-      const info = await stat(fullPath);
-      if (!info.isFile()) continue;
-      if (totalBytes >= MAX_UNTRACKED_TOTAL_BYTES) {
-        previews.push({ path: file, preview: "", note: "preview omitted; total untracked preview budget reached" });
-        continue;
-      }
-
-      const maxBytes = Math.min(MAX_UNTRACKED_FILE_BYTES, MAX_UNTRACKED_TOTAL_BYTES - totalBytes, info.size);
-      const handle = await open(fullPath, "r");
-      try {
-        const buffer = Buffer.alloc(maxBytes);
-        const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0);
-        const slice = buffer.subarray(0, bytesRead);
-        if (!isProbablyText(slice)) {
-          previews.push({ path: file, preview: "", note: `binary or non-text file, ${info.size} bytes` });
-          continue;
-        }
-
-        totalBytes += slice.byteLength;
-        previews.push({
-          path: file,
-          preview: new TextDecoder().decode(slice),
-          note: info.size > slice.byteLength ? `preview truncated at ${slice.byteLength}/${info.size} bytes` : undefined,
-        });
-      } finally {
-        await handle.close();
-      }
-    } catch (error) {
-      previews.push({ path: file, preview: "", note: `could not read preview: ${error instanceof Error ? error.message : String(error)}` });
-    }
-  }
-
-  return previews;
 }
 
 function normalizeSubject(subject: unknown): string {
@@ -383,7 +370,7 @@ function formatCompletedCommits(commits: PlanCommit[]): string {
 function normalizeFileSpec(value: unknown, file: DiffFile | undefined): FileSpec | undefined {
   if (value === "all") return "all";
   if (!Array.isArray(value)) return undefined;
-  if (!file || file.binary || file.hunks.length === 0) return "all";
+  if (!file || file.wholeFileOnly || file.hunks.length === 0) return "all";
 
   const valid = [...new Set(value)]
     .filter((item): item is number => Number.isInteger(item) && item >= 0 && item < file.hunks.length)
@@ -447,12 +434,19 @@ function normalizePlan(raw: unknown, changedFiles: Set<string>, diffByPath: Map<
       continue;
     }
 
-    if (specs.includes("all")) continue;
+    if (specs.includes("all")) {
+      if (specs.length > 1) throw new Error(`Overlapping commit plan for ${file}: whole-file changes belong in exactly one commit. Run /commit again.`);
+      continue;
+    }
 
     const diffFile = diffByPath.get(file);
     if (!diffFile || diffFile.hunks.length === 0) continue;
 
-    const selected = new Set(specs.flatMap((spec) => Array.isArray(spec) ? spec : []));
+    const allSelections = specs.flatMap((spec) => Array.isArray(spec) ? spec : []);
+    const selected = new Set(allSelections);
+    if (selected.size !== allSelections.length) {
+      throw new Error(`Overlapping commit plan for ${file}: a hunk belongs to multiple commits. Run /commit again.`);
+    }
     const missingHunks = diffFile.hunks.map((hunk) => hunk.index).filter((index) => !selected.has(index));
     if (missingHunks.length > 0) fallbackFiles[file] = missingHunks;
   }
@@ -497,7 +491,7 @@ function formatPlan(commits: PlanCommit[], warnings: string[], sensitiveSkipped:
     lines.push("");
   }
 
-  lines.push("This will reset the git index and stage each commit group automatically. Working tree contents are not discarded.");
+  lines.push("All groups are preflighted in a temporary index. This will replace staging with the approved trees; working tree contents are not discarded. If the repository or a hook changes the plan, execution stops without undoing created commits.");
   return lines.join("\n");
 }
 
@@ -515,8 +509,93 @@ async function selectCommitAction(
   return ctx.ui.select(`${title}\nReview the details above before continuing.`, options);
 }
 
-async function git(pi: ExtensionAPI, root: string, args: string[], timeout = 60_000) {
-  return pi.exec("git", args, { cwd: root, timeout });
+async function git(pi: ExtensionAPI, root: string, args: string[], timeout = 60_000, indexFile?: string) {
+  // pi.exec has no per-call env option. Never mutate process.env: other extensions
+  // and concurrent commands must continue to use their own index.
+  return indexFile
+    ? pi.exec("env", [`GIT_INDEX_FILE=${indexFile}`, "git", ...args], { cwd: root, timeout })
+    : pi.exec("git", args, { cwd: root, timeout });
+}
+
+async function checkedGit(pi: ExtensionAPI, root: string, args: string[], timeout = 60_000, indexFile?: string) {
+  const result = await git(pi, root, args, timeout, indexFile);
+  if (result.code !== 0 || result.killed || result.truncated) {
+    throw new Error(`git ${args.join(" ")} failed:\n${truncateText(resultText(result) || "No Git error output", 5_000)}`);
+  }
+  return result;
+}
+
+async function readHeadState(pi: ExtensionAPI, root: string): Promise<HeadState> {
+  const commit = await git(pi, root, ["rev-parse", "--verify", "--quiet", "HEAD"], 10_000);
+  const ref = await git(pi, root, ["symbolic-ref", "--quiet", "HEAD"], 10_000);
+  for (const result of [commit, ref]) {
+    if ((result.code !== 0 && result.code !== 1) || result.killed || result.truncated) {
+      throw new Error(`Could not resolve HEAD:\n${resultText(result)}`);
+    }
+  }
+  return {
+    commit: commit.code === 0 ? commit.stdout.trim() : undefined,
+    ref: ref.code === 0 ? ref.stdout.trim() : undefined,
+  };
+}
+
+function sameHead(a: HeadState, b: HeadState): boolean {
+  return a.commit === b.commit && a.ref === b.ref;
+}
+
+async function readIndexTree(pi: ExtensionAPI, root: string, sandbox: CommitSandbox): Promise<string> {
+  // write-tree may refresh index extensions. Run it on a copy so even cancelled
+  // planning leaves the real index (including intent-to-add entries) untouched.
+  try {
+    await copyFile(sandbox.realIndexFile, sandbox.stateIndexFile);
+  } catch (error) {
+    if ((error as { code?: string }).code !== "ENOENT") throw error;
+    await checkedGit(pi, root, ["read-tree", "--empty"], 60_000, sandbox.stateIndexFile);
+  }
+  return (await checkedGit(pi, root, ["write-tree"], 60_000, sandbox.stateIndexFile)).stdout.trim();
+}
+
+async function readWorktreeTree(pi: ExtensionAPI, root: string, sandbox: CommitSandbox, baseTree: string): Promise<string> {
+  // Start with the original tracking state so force-added ignored files, sparse
+  // checkout flags, and intent-to-add entries survive every snapshot comparison.
+  await copyFile(sandbox.snapshotIndexFile, sandbox.stateIndexFile);
+  const addArgs = ["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "add"];
+  await checkedGit(pi, root, [...addArgs, "-A", "--", ".", ...SENSITIVE_EXCLUDE_PATHS], 60_000, sandbox.stateIndexFile);
+  // Copying an index changes its mtime and can hide racy, same-size edits. Force
+  // tracked blobs through Git's clean filters instead of trusting cached stat data.
+  await checkedGit(pi, root, [...addArgs, "--renormalize", "--", ".", ...SENSITIVE_EXCLUDE_PATHS], 60_000, sandbox.stateIndexFile);
+  // Exclusions alone do not remove secrets that were already staged by the user.
+  const changed = await checkedGit(pi, root, ["diff", "--cached", "--no-ext-diff", "--name-only", "--no-renames", "-z", baseTree, "--"], 60_000, sandbox.stateIndexFile);
+  const sensitive = changed.stdout.split("\0").filter((path) => path && isSensitivePath(path));
+  if (sensitive.length > 0) {
+    await checkedGit(pi, root, ["restore", "--staged", `--source=${baseTree}`, "--", ...sensitive.map((path) => `:(literal)${path}`)], 60_000, sandbox.stateIndexFile);
+  }
+  return (await checkedGit(pi, root, ["write-tree"], 60_000, sandbox.stateIndexFile)).stdout.trim();
+}
+
+async function captureSnapshot(pi: ExtensionAPI, root: string, sandbox: CommitSandbox): Promise<CommitSnapshot> {
+  const head = await readHeadState(pi, root);
+  const baseTree = (await checkedGit(pi, root, head.commit
+    ? ["rev-parse", `${head.commit}^{tree}`]
+    : ["hash-object", "-w", "-t", "tree", "--stdin"])).stdout.trim();
+  const indexTree = await readIndexTree(pi, root, sandbox);
+  await copyFile(sandbox.stateIndexFile, sandbox.snapshotIndexFile);
+  const targetTree = await readWorktreeTree(pi, root, sandbox, baseTree);
+  if (!sameHead(head, await readHeadState(pi, root))) throw new Error("HEAD or branch changed while gathering changes. Run /commit again.");
+  return { head, baseTree, targetTree, indexTree };
+}
+
+async function assertSnapshot(pi: ExtensionAPI, root: string, run: CommitRun, expectedIndex?: string): Promise<void> {
+  if (!sameHead(run.head, await readHeadState(pi, root))) {
+    throw new Error("HEAD or branch changed since planning. Existing commits were not reset; review the repository and run /commit again.");
+  }
+  if (expectedIndex !== undefined && await readIndexTree(pi, root, run.sandbox) !== expectedIndex) {
+    throw new Error("The Git index changed outside the approved plan. Staged contents were left untouched; review them and run /commit again.");
+  }
+  if (await readWorktreeTree(pi, root, run.sandbox, run.snapshot.baseTree) !== run.snapshot.targetTree) {
+    throw new Error("The working tree changed since the planning snapshot (including file contents, modes, or paths). No new changes will be included; review them and run /commit again.");
+  }
+  if (!sameHead(run.head, await readHeadState(pi, root))) throw new Error("HEAD or branch changed during validation. Run /commit again.");
 }
 
 function cleanCommitStyleExample(record: string): string {
@@ -590,6 +669,7 @@ async function promptPushAfterCommits(
   root: string,
   ctx: any,
   setStatus: (text: string | undefined) => void,
+  verify: () => Promise<void>,
 ): Promise<PushSummary> {
   const branch = await currentBranchName(pi, root);
   if (!branch) {
@@ -602,6 +682,7 @@ async function promptPushAfterCommits(
   const pushChoice = `Push to ${target}`;
   const choice = await ctx.ui.select(`Created commits on ${branch}. Push now?`, [pushChoice, "Skip push"]);
   if (choice !== pushChoice) return { text: "✓ Push skipped", failed: false };
+  await verify();
 
   setStatus(`Pushing to ${target}…`);
   const result = await git(pi, root, upstream ? ["push"] : ["push", "-u", "origin", "HEAD"], 300_000);
@@ -617,73 +698,171 @@ async function promptPushAfterCommits(
   return { text: `✓ Pushed to ${target}`, failed: false };
 }
 
-async function hasStagedChanges(pi: ExtensionAPI, root: string): Promise<boolean> {
-  const result = await git(pi, root, ["diff", "--cached", "--quiet", "--exit-code"], 10_000);
-  return result.code === 1;
-}
-
-async function stageWholeFile(pi: ExtensionAPI, root: string, file: string, diffByPath: Map<string, DiffFile>): Promise<void> {
+async function stageWholeFile(pi: ExtensionAPI, root: string, file: string, diffByPath: Map<string, DiffFile>, source: StageSource = {}): Promise<void> {
   const diffFile = diffByPath.get(file);
   const paths = diffFile && diffFile.oldPath !== diffFile.path ? [diffFile.oldPath, diffFile.path] : [file];
-  await git(pi, root, ["add", "-A", "--", ...paths]);
+  const args = source.target ? ["restore", "--staged", `--source=${source.target}`] : ["add", "-A"];
+  await checkedGit(pi, root, [...args, "--", ...paths.map((path) => `:(literal)${path}`)], 60_000, source.indexFile);
 }
 
-async function stagePartialFile(pi: ExtensionAPI, root: string, file: string, hunks: number[], originalDiff: DiffFile): Promise<boolean> {
-  const current = parseDiff((await git(pi, root, ["diff", "--no-ext-diff", "--no-color", "HEAD", "--", file])).stdout);
-  const currentFile = current.find((item) => item.path === file || item.oldPath === file);
-  if (!currentFile) return false;
+function selectCurrentHunks(file: string, indices: number[], original: DiffFile, current: DiffFile): Hunk[] {
+  const unchanged = original.header === current.header
+    && original.hunks.length === current.hunks.length
+    && original.hunks.every((hunk, index) => hunk.body === current.hunks[index].body);
+  const selected: Hunk[] = [];
+  const used = new Set<number>();
 
-  const selected: string[] = [];
-  for (const index of hunks) {
-    const originalHunk = originalDiff.hunks[index];
-    if (!originalHunk) continue;
-    const match = currentFile.hunks.find((hunk) => hunk.fingerprint === originalHunk.fingerprint);
-    if (match) selected.push(match.body);
+  for (const index of indices) {
+    const originalHunk = original.hunks[index];
+    if (!originalHunk) throw new Error(`Invalid hunk ${index} for ${file}.`);
+
+    let match = unchanged ? current.hunks[index] : undefined;
+    if (!match) {
+      // Matching only +/- lines can silently select the same edit at another
+      // location. Require unchanged context and uniqueness in both diffs.
+      const sameHunk = (hunk: Hunk) => hunk.fingerprint === originalHunk.fingerprint;
+      const candidates = current.hunks.filter(sameHunk);
+      if (original.hunks.filter(sameHunk).length === 1 && candidates.length === 1) match = candidates[0];
+    }
+    if (!match || used.has(match.index)) {
+      throw new Error(`Cannot safely match hunk ${index} for ${file}: the diff changed, the hunk was already committed, or the match is ambiguous.`);
+    }
+    used.add(match.index);
+    selected.push(match);
   }
-  if (selected.length === 0) return false;
+  if (selected.length === 0) throw new Error(`No hunks selected for ${file}.`);
+  return selected.sort((a, b) => a.index - b.index);
+}
 
-  const patch = `${currentFile.header}${selected.join("")}`;
+async function stagePartialFile(pi: ExtensionAPI, root: string, file: string, hunks: number[], originalDiff: DiffFile, source: StageSource = {}): Promise<void> {
+  const revisions = [source.base ?? "HEAD", ...(source.target ? [source.target] : [])];
+  const result = await checkedGit(pi, root, [...DIFF_ARGS, ...revisions, "--", `:(literal)${file}`], 60_000, source.indexFile);
+  const currentFile = parseDiff(result.stdout).find((item) => item.path === file || item.oldPath === file);
+  if (!currentFile) throw new Error(`Cannot stage hunks for ${file}: no remaining diff (already committed or changed).`);
+  if (originalDiff.wholeFileOnly || currentFile.wholeFileOnly) {
+    throw new Error(`Cannot split hunks for ${file}: structural or binary changes require a new whole-file plan.`);
+  }
+
+  const selected = selectCurrentHunks(file, hunks, originalDiff, currentFile);
+  const patch = `${currentFile.header}${selected.map((hunk) => hunk.body).join("")}`;
   const patchPath = join(tmpdir(), `pi-commit-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.patch`);
   await writeFile(patchPath, patch, "utf8");
   try {
-    const result = await git(pi, root, ["apply", "--cached", patchPath]);
-    return result.code === 0;
+    await checkedGit(pi, root, ["apply", "--cached", "--whitespace=nowarn", patchPath], 60_000, source.indexFile);
   } finally {
     await unlink(patchPath).catch(() => {});
   }
 }
 
-async function stageCommitFiles(pi: ExtensionAPI, root: string, commit: PlanCommit, diffByPath: Map<string, DiffFile>, ctx: any): Promise<void> {
-  await git(pi, root, ["reset", "--quiet", "HEAD"]);
+async function stageCommitFiles(pi: ExtensionAPI, root: string, commit: PlanCommit, diffByPath: Map<string, DiffFile>, source: StageSource = {}): Promise<void> {
+  // Preserve staged contents if any file in this group fails. Never change worktree contents.
+  const previousTree = (await checkedGit(pi, root, ["write-tree"], 60_000, source.indexFile)).stdout.trim();
+  // Preflight advances trees without creating commits or moving HEAD.
+  await checkedGit(pi, root, source.base ? ["read-tree", source.base] : ["reset", "--quiet"], 60_000, source.indexFile);
 
-  for (const [file, spec] of Object.entries(commit.files)) {
-    if (isSensitivePath(file)) continue;
-    if (spec === "all") {
-      await stageWholeFile(pi, root, file, diffByPath);
-      continue;
-    }
+  try {
+    for (const [file, spec] of Object.entries(commit.files)) {
+      if (isSensitivePath(file)) continue;
+      if (spec === "all") {
+        await stageWholeFile(pi, root, file, diffByPath, source);
+        continue;
+      }
 
-    const diffFile = diffByPath.get(file);
-    const staged = diffFile ? await stagePartialFile(pi, root, file, spec, diffFile) : false;
-    if (!staged) {
-      ctx.ui.notify(`Could not stage selected hunks for ${file}; staging whole file`, "warning");
-      await stageWholeFile(pi, root, file, diffByPath);
+      const diffFile = diffByPath.get(file);
+      if (!diffFile) throw new Error(`Missing planned diff for ${file}.`);
+      await stagePartialFile(pi, root, file, spec, diffFile, source);
     }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    try {
+      await checkedGit(pi, root, ["read-tree", previousTree], 60_000, source.indexFile);
+    } catch (restoreError) {
+      throw new Error(`${message}\nCould not restore the previous index: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}\nStop and inspect git status before continuing.`);
+    }
+    throw new Error(`${message}\nStaging stopped and the previous staged contents were restored; no whole-file fallback was used. Review the remaining changes and run /commit again.`);
   }
 }
 
-async function commitStaged(pi: ExtensionAPI, root: string, commit: PlanCommit, options?: { noVerify?: boolean }) {
+async function preflightPlan(pi: ExtensionAPI, root: string, commits: PlanCommit[], diffByPath: Map<string, DiffFile>, run: CommitRun): Promise<PreparedCommit[]> {
+  const { sandbox, snapshot } = run;
+  await checkedGit(pi, root, ["read-tree", snapshot.baseTree], 60_000, sandbox.indexFile);
+  const prepared: PreparedCommit[] = [];
+  let base = snapshot.baseTree;
+  for (const [index, commit] of commits.entries()) {
+    try {
+      await stageCommitFiles(pi, root, commit, diffByPath, { indexFile: sandbox.indexFile, base, target: snapshot.targetTree });
+      const tree = (await checkedGit(pi, root, ["write-tree"], 60_000, sandbox.indexFile)).stdout.trim();
+      if (tree === base) throw new Error("This group produces an empty commit.");
+      prepared.push({ commit, tree });
+      base = tree;
+    } catch (error) {
+      throw new Error(`Preflight failed for commit ${index + 1}/${commits.length} (${commit.subject}). No commits were created and the real index was not changed.\n${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  if (base !== snapshot.targetTree) throw new Error("Preflight did not reproduce the complete planning snapshot. No commits were created; run /commit again.");
+  return prepared;
+}
+
+async function commitStaged(pi: ExtensionAPI, root: string, commit: PlanCommit, options?: { noVerify?: boolean; expected?: { head: HeadState; tree: string } }) {
+  const before = await readHeadState(pi, root);
+  const expectedTree = (await checkedGit(pi, root, ["write-tree"])).stdout.trim();
+  if (options?.expected && (!sameHead(before, options.expected.head) || expectedTree !== options.expected.tree)) {
+    throw new Error("HEAD or the staged tree changed before commit. Nothing will be committed; review the repository and run /commit again.");
+  }
   const args = ["commit", "-m", commit.subject];
   if (commit.description) args.push("-m", commit.description);
   if (options?.noVerify) args.push("--no-verify");
-  return git(pi, root, args, 120_000);
+  const result = await git(pi, root, args, 120_000);
+  const after = await readHeadState(pi, root);
+  const failed = result.code !== 0 || result.killed || result.truncated;
+  if (failed && sameHead(before, after)) return { ...result, code: result.code || 1, committedHead: undefined };
+  if (failed) {
+    throw new Error(`Git reported failure but HEAD or branch changed (now ${after.commit ?? "unborn"}). A commit may have been created; it was not reset and will not be retried automatically. Review git log and git status.\n${resultText(result)}`);
+  }
+  if (!after.commit || before.commit === after.commit || before.ref !== after.ref) {
+    throw new Error("Git reported success but HEAD or branch does not match the expected commit transition. Stop and inspect git log; history was not reset.");
+  }
+  const details = await checkedGit(pi, root, ["log", "-1", "--no-show-signature", "--format=%T%n%P", after.commit]);
+  const [tree, parents = ""] = details.stdout.trim().split("\n");
+  if (tree !== expectedTree || parents !== (before.commit ?? "")) {
+    throw new Error(`Commit ${after.commit} was created but its tree or parent does not match the approved plan (a hook or another Git process may have changed it). Remaining commits and push were stopped. The created commit was NOT reset; review git show ${after.commit} before continuing.`);
+  }
+  return { ...result, committedHead: after };
+}
+
+async function executePreparedCommit(pi: ExtensionAPI, root: string, prepared: PreparedCommit, run: CommitRun, retry = false, noVerify = false) {
+  // An explicit retry may replace a failed hook's staging, but never its worktree
+  // edits. Every attempt uses the frozen tree, not another git add of live files.
+  await assertSnapshot(pi, root, run, retry ? undefined : run.indexTree);
+  const previousTree = await readIndexTree(pi, root, run.sandbox);
+  await checkedGit(pi, root, ["read-tree", prepared.tree]);
+  try {
+    await assertSnapshot(pi, root, run, prepared.tree);
+  } catch (error) {
+    // Undo only our own staging, never an external writer's index or moved HEAD.
+    if (sameHead(run.head, await readHeadState(pi, root)) && await readIndexTree(pi, root, run.sandbox) === prepared.tree) {
+      await checkedGit(pi, root, ["read-tree", previousTree]);
+    }
+    throw error;
+  }
+  const result = await commitStaged(pi, root, prepared.commit, { noVerify, expected: { head: run.head, tree: prepared.tree } });
+  if (result.committedHead) {
+    run.head = result.committedHead;
+    run.indexTree = prepared.tree;
+    try {
+      await assertSnapshot(pi, root, run, run.indexTree);
+    } catch (error) {
+      throw new Error(`Commit ${run.head.commit} was created. Validation after commit failed; remaining commits and push were stopped, and no commits were undone.\n${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return result;
 }
 
 function resultText(result: { stdout: string; stderr: string }): string {
   return [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
 }
 
-type CommitFailureResolution = "committed" | "skip" | "abort" | "fix";
+type CommitFailureResolution = "committed" | "abort" | "fix";
 
 function formatCommitFailureDetails(commit: PlanCommit, errorOutput: string): string {
   return [
@@ -701,52 +880,39 @@ function formatCommitFailureDetails(commit: PlanCommit, errorOutput: string): st
 async function resolveCommitFailure(
   pi: ExtensionAPI,
   root: string,
-  commit: PlanCommit,
+  prepared: PreparedCommit,
   index: number,
   total: number,
   initialErrorOutput: string,
-  diffByPath: Map<string, DiffFile>,
+  run: CommitRun,
   ctx: any,
 ): Promise<CommitFailureResolution> {
+  const { commit } = prepared;
   let errorOutput = initialErrorOutput || "git commit failed";
 
   while (true) {
-    await git(pi, root, ["reset", "--quiet", "HEAD"]);
     const choice = await selectCommitAction(ctx, `Commit ${index + 1}/${total} failed`, formatCommitFailureDetails(commit, errorOutput), [
       "Fix with agent",
       "Retry",
       "Retry --no-verify",
-      "Skip this commit",
       "Abort remaining commits",
     ]);
 
     if (choice === "Retry" || choice === "Retry --no-verify") {
-      await stageCommitFiles(pi, root, commit, diffByPath, ctx);
-      if (!(await hasStagedChanges(pi, root))) {
-        errorOutput = "Retry produced no staged changes for this commit.";
-        continue;
-      }
-
-      const retry = await commitStaged(pi, root, commit, { noVerify: choice === "Retry --no-verify" });
+      const retry = await executePreparedCommit(pi, root, prepared, run, true, choice === "Retry --no-verify");
       if (retry.code === 0) return "committed";
       errorOutput = resultText(retry) || "git commit failed";
       continue;
     }
 
-    if (choice === "Skip this commit") {
-      await git(pi, root, ["reset", "--quiet", "HEAD"]);
-      ctx.ui.notify(`Skipped commit: ${commit.subject}`, "warning");
-      return "skip";
-    }
-
     if (choice === "Fix with agent") {
-      await git(pi, root, ["reset", "--quiet", "HEAD"]);
       pi.sendUserMessage(`The /commit command failed while creating commit \"${commit.subject}\". Please fix the issue, then run /commit again.\n\n\`\`\`\n${errorOutput}\n\`\`\``);
       return "fix";
     }
 
-    await git(pi, root, ["reset", "--quiet", "HEAD"]);
-    ctx.ui.notify("Aborted remaining commits", "info");
+    // Later frozen trees include this group's changes, so skipping a group would
+    // silently reintroduce it. Stop and replan instead, preserving the current index.
+    ctx.ui.notify("Aborted remaining commits; existing commits and staged contents were preserved. Run /commit again to replan.", "info");
     return "abort";
   }
 }
@@ -807,6 +973,8 @@ export default function commitExtension(pi: ExtensionAPI) {
         return;
       }
 
+      let sandbox: CommitSandbox | undefined;
+      const completed: PlanCommit[] = [];
       const working = createCommandWorking(ctx, "commit", "Commit");
       const setStatus = (text: string | undefined, details: string[] = []) => {
         working.set(text, details);
@@ -814,19 +982,28 @@ export default function commitExtension(pi: ExtensionAPI) {
 
       try {
         setStatus("Gathering changes…");
+        const directory = await mkdtemp(join(tmpdir(), "pi-commit-plan-"));
+        sandbox = {
+          directory,
+          indexFile: join(directory, "plan.index"),
+          stateIndexFile: join(directory, "state.index"),
+          snapshotIndexFile: join(directory, "snapshot.index"),
+          realIndexFile: "",
+        };
+        sandbox.realIndexFile = resolve(root, (await checkedGit(pi, root, ["rev-parse", "--git-path", "index"])).stdout.trim());
+        const snapshot = await captureSnapshot(pi, root, sandbox);
+        const run: CommitRun = { sandbox, snapshot, head: snapshot.head, indexTree: snapshot.indexTree };
         const pathspec = ["--", ".", ...SENSITIVE_EXCLUDE_PATHS];
-        const [log, status, statusAll, diff, untrackedRaw, authorStyleExamples] = await Promise.all([
+        const [log, status, statusAll, diff, authorStyleExamples] = await Promise.all([
           git(pi, root, ["log", "-6", "--format=%s%n%b---"], 10_000),
-          git(pi, root, ["status", "--short", ...pathspec], 20_000),
-          git(pi, root, ["status", "--short"], 20_000),
-          git(pi, root, ["diff", "--no-ext-diff", "--no-color", "HEAD", ...pathspec], 60_000),
-          git(pi, root, ["ls-files", "--others", "--exclude-standard", "-z", ...pathspec], 20_000),
+          checkedGit(pi, root, ["--no-optional-locks", "status", "--short", ...pathspec], 20_000),
+          checkedGit(pi, root, ["--no-optional-locks", "status", "--short"], 20_000),
+          checkedGit(pi, root, [...DIFF_ARGS, snapshot.baseTree, snapshot.targetTree, ...pathspec]),
           readAuthorCommitStyleExamples(pi, root),
         ]);
 
         const diffFiles = parseDiff(diff.stdout);
-        const untrackedFiles = parseNulList(untrackedRaw.stdout);
-        const changedFiles = new Set<string>([...diffFiles.map((file) => file.path), ...untrackedFiles]);
+        const changedFiles = new Set(diffFiles.map((file) => file.path));
         const sensitiveSkipped = [...new Set(parseSensitiveStatusPaths(statusAll.stdout))];
 
         if (changedFiles.size === 0) {
@@ -835,7 +1012,6 @@ export default function commitExtension(pi: ExtensionAPI) {
           return;
         }
 
-        const untrackedPreviews = await readUntrackedPreviews(root, untrackedFiles);
         const diffByPath = new Map(diffFiles.map((file) => [file.path, file]));
         const sessionContext = buildSessionContext(ctx);
         const explicitIntent = (args ?? "").trim();
@@ -847,7 +1023,7 @@ export default function commitExtension(pi: ExtensionAPI) {
           `## Git status (safe paths only)\n${status.stdout.trim()}`,
           `## Changed files that must be placed\n${[...changedFiles].sort().join("\n")}`,
           sensitiveSkipped.length ? `## Sensitive files excluded from commit\n${sensitiveSkipped.join("\n")}` : "",
-          `## Diff and untracked previews\n${formatDiffForModel(diffFiles, untrackedPreviews)}`,
+          `## Frozen diff (including new files)\n${formatDiffForModel(diffFiles)}`,
         ].filter(Boolean).join("\n\n");
 
         setStatus("Planning commits with medium model…");
@@ -855,6 +1031,10 @@ export default function commitExtension(pi: ExtensionAPI) {
         const rawPlan = extractJsonObject(planText);
         const { commits, warnings } = normalizePlan(rawPlan, changedFiles, diffByPath);
 
+        setStatus("Validating all commit groups in a temporary index…");
+        await assertSnapshot(pi, root, run, run.indexTree);
+        const prepared = await preflightPlan(pi, root, commits, diffByPath, run);
+        await assertSnapshot(pi, root, run, run.indexTree);
         setStatus(undefined);
         const plan = formatPlan(commits, warnings, sensitiveSkipped);
         const confirmed = ctx.mode === "tui"
@@ -865,43 +1045,18 @@ export default function commitExtension(pi: ExtensionAPI) {
           return;
         }
 
-        const completed: PlanCommit[] = [];
-        for (const [index, commit] of commits.entries()) {
-          setStatus(`Committing ${index + 1}/${commits.length}…`, [commit.subject]);
-          await stageCommitFiles(pi, root, commit, diffByPath, ctx);
-
-          if (!(await hasStagedChanges(pi, root))) {
-            ctx.ui.notify(`Skipping empty commit: ${commit.subject}`, "warning");
-            continue;
-          }
-
-          let result = await commitStaged(pi, root, commit);
-          if (result.code !== 0) {
-            const dirtyNames = parseNulList((await git(pi, root, ["diff", "--name-only", "-z"])).stdout);
-            const commitFiles = new Set(Object.keys(commit.files));
-            const touchedCommitFiles = dirtyNames.filter((file) => commitFiles.has(file));
-            if (touchedCommitFiles.length > 0) {
-              for (const file of touchedCommitFiles) await stageWholeFile(pi, root, file, diffByPath);
-              result = await commitStaged(pi, root, commit);
-            }
-          }
-
+        for (const [index, item] of prepared.entries()) {
+          setStatus(`Committing ${index + 1}/${prepared.length}…`, [item.commit.subject]);
+          const result = await executePreparedCommit(pi, root, item, run);
           if (result.code !== 0) {
             const errorOutput = resultText(result) || "git commit failed";
             setStatus(undefined);
-            const resolution = await resolveCommitFailure(pi, root, commit, index, commits.length, errorOutput, diffByPath, ctx);
-            if (resolution === "committed") {
-              completed.push(commit);
-              continue;
-            }
-            if (resolution === "skip") continue;
-            return;
+            const resolution = await resolveCommitFailure(pi, root, item, index, prepared.length, errorOutput, run, ctx);
+            if (resolution !== "committed") return;
           }
-
-          completed.push(commit);
+          completed.push(item.commit);
         }
 
-        await git(pi, root, ["reset", "--quiet", "HEAD"]);
         setStatus(undefined);
 
         if (completed.length === 0) {
@@ -909,7 +1064,7 @@ export default function commitExtension(pi: ExtensionAPI) {
           return;
         }
 
-        const pushSummary = await promptPushAfterCommits(pi, root, ctx, setStatus);
+        const pushSummary = await promptPushAfterCommits(pi, root, ctx, setStatus, () => assertSnapshot(pi, root, run, run.indexTree));
         const summary = formatCompletedCommits(completed);
         pi.sendMessage(
           {
@@ -923,8 +1078,12 @@ export default function commitExtension(pi: ExtensionAPI) {
         ctx.ui.notify(`Created ${completed.length} commit${completed.length === 1 ? "" : "s"}`, "info");
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        ctx.ui.notify(`/commit failed: ${message}`, "error");
+        const retained = completed.length > 0 ? `\n${completed.length} earlier verified commit(s) were retained.` : "";
+        ctx.ui.notify(`/commit failed: ${message}${retained}`, "error");
       } finally {
+        if (sandbox) await rm(sandbox.directory, { recursive: true, force: true }).catch(() => {
+          ctx.ui.notify(`Could not remove temporary commit index directory: ${sandbox.directory}`, "warning");
+        });
         working.clear();
       }
     },

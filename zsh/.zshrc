@@ -148,7 +148,8 @@ alias gd="gh dash"
 alias cr-review='git fetch origin $(base-ref):$(base-ref) &&  cr review --base=$(base-ref) --prompt-only'
 
 # VIM
-alias v='rm -f ~/.cache/nvim/server.pipe && nvim --listen ~/.cache/nvim/server.pipe'
+# Let each Neovim instance use its own RPC socket for lazygit and other clients.
+alias v='nvim'
 alias vv='nvim'
 
 # bat

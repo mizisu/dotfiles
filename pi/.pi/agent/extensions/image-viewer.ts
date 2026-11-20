@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import {
   convertToPng,
   ToolExecutionComponent,
@@ -24,8 +25,7 @@ const PATCH = Symbol.for("pi.image-viewer.patch");
 type ImageSource = { data: string; mimeType: string; filename?: string };
 type MouseImage = Image & Pick<Component, "handleMouse">;
 
-// Pi has no image-click hook or source getter. Keep the private-field dependency here;
-// leave Image.render() alone, since tmux-images.ts also wraps it.
+// Pi has no image-click hook or source getter. Keep the private-field dependency here.
 function imageSource(image: Image): ImageSource | undefined {
   const data = Reflect.get(image, "base64Data");
   const mimeType = Reflect.get(image, "mimeType");
@@ -34,7 +34,7 @@ function imageSource(image: Image): ImageSource | undefined {
   return { data, mimeType, filename: typeof filename === "string" ? filename : undefined };
 }
 
-// Native image lines have zero text width; tmux previews use visible Unicode cells.
+// Native image lines have zero text width; text fallbacks use visible cells.
 // Read only the protocol header, never scan the entire base64 payload for layout.
 function imageColumns(lines: string[]): number {
   const kitty = /^\x1b_G[^;]*\bc=(\d+)(?:,|;)/.exec((lines[0] ?? "").slice(0, 256));
@@ -46,22 +46,26 @@ function imageColumns(lines: string[]): number {
 
 // Pi's overlay compositor deliberately preserves native image lines instead of
 // covering them. For this full-viewport modal, blank those background anchors at
-// the composition boundary (not Image.render, so cached parents/tmux still work).
+// the composition boundary so cached parent components keep working.
 // This is a private TUI hook; scope it to this interaction and restore it exactly.
 function hideUnderlyingImages(tui: TUI): () => void {
+  // Pi's forwarding proxy wraps function reads and does not forward property
+  // descriptors/deletion. valueOf() returns its actual receiver, so capture this
+  // renderer for both installation and cleanup (even if Pi later switches it).
+  const renderer = tui.valueOf() as TUI;
   const key = "compositeOverlays";
-  const original = Reflect.get(tui, key);
+  const original = Reflect.get(renderer, key);
   if (typeof original !== "function") throw new Error("This Pi version does not support image overlays.");
-  const descriptor = Object.getOwnPropertyDescriptor(tui, key);
+  const descriptor = Object.getOwnPropertyDescriptor(renderer, key);
   function composite(this: TUI, lines: string[], width: number, height: number): string[] {
     const background = lines.map((line) => /\x1b(?:_G|\]1337;File=)/.test(line) ? "" : line);
     return original.call(this, background, width, height);
   }
-  Reflect.set(tui, key, composite);
+  Reflect.set(renderer, key, composite);
   return () => {
-    if (Reflect.get(tui, key) !== composite) return;
-    if (descriptor) Object.defineProperty(tui, key, descriptor);
-    else Reflect.deleteProperty(tui, key);
+    if (Reflect.get(renderer, key) !== composite) return;
+    if (descriptor) Object.defineProperty(renderer, key, descriptor);
+    else Reflect.deleteProperty(renderer, key);
   };
 }
 
@@ -69,11 +73,31 @@ function plainClick(event: TuiMouseEvent): boolean {
   return event.type === "click" && event.button === "left" && !event.shift && !event.alt && !event.ctrl;
 }
 
+const COPY_BUTTON = "[Copy image]";
+
+// Pi's copyToClipboard writes text. Send the displayed PNG bytes to AppKit instead.
+function copyPng(data: string): Promise<void> {
+  const script = `
+    ObjC.import('AppKit');
+    const png = $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile;
+    const board = $.NSPasteboard.generalPasteboard;
+    board.clearContents;
+    if (!board.setDataForType(png, $.NSPasteboardTypePNG)) throw Error('Clipboard unavailable');
+  `;
+  return new Promise((resolve, reject) => {
+    const child = execFile("/usr/bin/osascript", ["-l", "JavaScript", "-e", script], { timeout: 5000 },
+      (error) => error ? reject(error) : resolve());
+    child.stdin!.on("error", reject).end(Buffer.from(data, "base64"));
+  });
+}
+
 class ImageOverlay implements Component {
   private readonly options: ImageOptions = {};
   private readonly image: Image;
   private readonly restoreImages: () => void;
   private disposed = false;
+  private copyRow = -1;
+  private copyStatus: "" | "Copying…" | "Copied!" | "Copy failed" = "";
 
   constructor(
     private readonly tui: TUI,
@@ -89,6 +113,7 @@ class ImageOverlay implements Component {
 
   render(width: number): string[] {
     const height = Math.max(1, this.tui.terminal.rows);
+    this.copyRow = process.platform === "darwin" && width >= 1 + COPY_BUTTON.length && height >= 3 ? height - 1 : -1;
     if (width < 4 || height < 3) {
       this.image.invalidate();
       return [truncateToWidth("Esc to close", width), ...Array<string>(height - 1).fill("")];
@@ -110,16 +135,36 @@ class ImageOverlay implements Component {
     for (let row = 0; row < imageLines.length && top + row < height - 1; row++) {
       lines[top + row] = left + imageLines[row];
     }
-    lines[height - 1] = this.theme.fg("muted", truncateToWidth(" Esc / q / click to close", width));
+    const button = this.copyRow >= 0 ? ` ${this.theme.fg("accent", COPY_BUTTON)} ` : "";
+    const hint = process.platform === "darwin" ? " c to copy, Esc / q / click elsewhere to close" : " Esc / q / click to close";
+    const status = this.copyStatus ? this.theme.fg(this.copyStatus === "Copy failed" ? "error" : "accent", ` ${this.copyStatus} `) : "";
+    lines[height - 1] = truncateToWidth(button + status + this.theme.fg("muted", hint), width, "");
     return lines;
   }
 
+  private async copy(): Promise<void> {
+    if (this.disposed || this.copyStatus === "Copying…") return;
+    this.copyStatus = "Copying…";
+    this.tui.requestRender();
+    try {
+      await copyPng(this.source.data);
+      this.copyStatus = "Copied!";
+    } catch {
+      this.copyStatus = "Copy failed";
+    }
+    if (!this.disposed) this.tui.requestRender();
+  }
+
   handleInput(data: string): void {
-    if (matchesKey(data, "escape") || matchesKey(data, "q") || matchesKey(data, "ctrl+c")) this.done();
+    if (process.platform === "darwin" && matchesKey(data, "c")) void this.copy();
+    else if (matchesKey(data, "escape") || matchesKey(data, "q") || matchesKey(data, "ctrl+c")) this.done();
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult {
-    if (plainClick(event)) this.done();
+    if (plainClick(event)) {
+      if (event.y === this.copyRow && event.x >= 1 && event.x < 1 + COPY_BUTTON.length) void this.copy();
+      else this.done();
+    }
     // Do not let clicks or wheel events reach the transcript behind this modal.
     return { handled: true };
   }

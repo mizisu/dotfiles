@@ -1,7 +1,7 @@
 local M = {}
 
 function M.active()
-  return vim.env.REX_SESSION ~= nil and vim.env.REX_BLOCK ~= nil and not vim.env.TMUX
+  return vim.env.REX_SESSION ~= nil and vim.env.REX_BLOCK ~= nil
 end
 
 function M.call(method, args)

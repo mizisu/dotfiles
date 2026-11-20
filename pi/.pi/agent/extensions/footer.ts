@@ -245,7 +245,7 @@ function paddedCwdLine(
   return paddedLine(theme.fg("dim", cwdText), width);
 }
 
-function renderModel(pi: ExtensionAPI, ctx: ExtensionContext): string {
+function renderModel(pi: ExtensionAPI, ctx: ExtensionContext, fastStatus?: string): string {
   const parts = [ctx.model?.id ?? "no-model"];
 
   if (ctx.model?.reasoning) {
@@ -253,6 +253,7 @@ function renderModel(pi: ExtensionAPI, ctx: ExtensionContext): string {
     parts.push(thinkingLevel === "off" ? "thinking off" : thinkingLevel);
   }
 
+  if (fastStatus) parts.push(fastStatus);
   return parts.join(" • ");
 }
 
@@ -373,11 +374,12 @@ function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
 
         const branch = footerData.getGitBranch();
         const contextLine = renderContextUsage(theme, ctx);
-        const modelLine = theme.fg("dim", renderModel(pi, ctx));
+        const statuses = footerData.getExtensionStatuses();
+        const modelLine = theme.fg("dim", renderModel(pi, ctx, statuses.get("fast-mode")));
 
         lines.push(paddedCwdLine(theme, ctx, branch, branch === prBranch ? pr : null, diffStats, width));
         lines.push(paddedLeftRight(contextLine, modelLine, width));
-        const goalStatus = footerData.getExtensionStatuses().get("goal");
+        const goalStatus = statuses.get("goal");
         if (goalStatus) lines.push(paddedLine(theme.fg("dim", goalStatus), width));
         lines.push(...Array.from({ length: FOOTER_BOTTOM_PADDING_LINES }, () => ""));
 

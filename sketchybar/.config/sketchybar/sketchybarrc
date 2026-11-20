@@ -33,7 +33,6 @@ BAR_PROPS=(
   margin=6
   blur_radius=30
   notch_width=0
-  topmost=off
 )
 
 # ============================================

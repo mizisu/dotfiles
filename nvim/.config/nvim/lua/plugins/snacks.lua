@@ -4,6 +4,12 @@ return {
   "snacks.nvim",
   opts = {
     lazygit = {
+      config = {
+        os = {
+          -- Editing uses the parent Neovim; keep standalone lazygit's fallback unchanged.
+          editInTerminal = false,
+        },
+      },
       win = {
         width = 0,
         height = 0,

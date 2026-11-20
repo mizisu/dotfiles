@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source_path="${BASH_SOURCE[0]}"
+while [[ -L "$source_path" ]]; do
+  source_dir="$(cd -P "$(dirname "$source_path")" && pwd)"
+  source_path="$(readlink "$source_path")"
+  [[ "$source_path" = /* ]] || source_path="$source_dir/$source_path"
+done
+root="$(cd -P "$(dirname "$source_path")" && pwd)"
+upstream="$root/upstream"
+
+if [[ "${1:-}" == update ]]; then
+  if [[ $# -ne 1 ]]; then
+    printf 'Usage: ppi update\n' >&2
+    exit 2
+  fi
+  if [[ ! -e "$upstream" ]]; then
+    gh repo clone cursor/plugins "$upstream" -- --depth=1 --filter=blob:none --sparse
+    git -C "$upstream" sparse-checkout set pstack
+  else
+    if [[ ! -d "$upstream/.git" ]]; then
+      printf 'Not an upstream checkout: %s\n' "$upstream" >&2
+      exit 1
+    fi
+    if [[ -n "$(git -C "$upstream" status --porcelain)" ]]; then
+      printf 'Upstream has local changes; refusing to update: %s\n' "$upstream" >&2
+      exit 1
+    fi
+    git -C "$upstream" pull --ff-only --no-rebase
+  fi
+  printf 'pstack: %s\n' "$(git -C "$upstream" rev-parse --short HEAD)"
+  exit 0
+fi
+
+case "${1:-}" in
+  install|remove|uninstall|list|config|auth|mcp) exec pi "$@" ;;
+esac
+
+if [[ ! -f "$upstream/pstack/skills/poteto-mode/SKILL.md" ]]; then
+  printf 'pstack is not installed. Run: ppi update\n' >&2
+  exit 1
+fi
+
+export PPI_ROOT="$root"
+exec pi --skill "$upstream/pstack/skills" \
+  --extension "$root/adapter.ts" "$@"
