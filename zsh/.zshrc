@@ -245,3 +245,6 @@ fi
 
 # sentry
 fpath=("$HOME/.local/share/zsh/site-functions" $fpath)
+
+# sentry
+fpath=("/Users/charles/.local/share/zsh/site-functions" $fpath)
