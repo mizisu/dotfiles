@@ -1,6 +1,6 @@
 {
   "$schema": "https://pi.dev/schemas/settings.schema.json",
-  "lastChangelogVersion": "1.5.2",
+  "lastChangelogVersion": "1.6.1",
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-6.2-astra",
   "mediumProvider": "openai-codex",
@@ -47,7 +47,7 @@
   "terminal": {
     "showImages": true,
     "clearOnShrink": false,
-    "showTerminalProgress": false
+    "showTerminalProgress": true
   },
   "showHardwareCursor": true,
   "doubleEscapeAction": "tree",
@@ -57,12 +57,19 @@
   "packages": [
     "npm:pi-web-access",
     "npm:pi-subagents",
-    "npm:pi-better"
+    "npm:pi-better",
+    {
+      "source": "git:github.com/epoko77-ai/im-not-ai",
+      "skills": []
+    }
+  ],
+  "skills": [
+    "./git/github.com/epoko77-ai/im-not-ai/codex/skills/humanize-korean/SKILL.md"
   ],
   "compaction": {
     "enabled": true
   },
-  "quietStartup": true,
+  "quietStartup": "header",
   "defaultProjectTrust": "ask",
   "enableInstallTelemetry": false,
   "markdown": {
@@ -73,8 +80,8 @@
   "collapseChangelog": true,
   "extensionChangelogVersions": {
     "{\"source\":\"https://github.com/davebcn87/pi-autoresearch\",\"scope\":\"user\"}": "1.9.0",
-    "{\"source\":\"npm:pi-web-access\",\"scope\":\"user\"}": "0.47.0",
-    "{\"source\":\"npm:pi-subagents\",\"scope\":\"user\"}": "0.88.0",
+    "{\"source\":\"npm:pi-web-access\",\"scope\":\"user\"}": "0.48.0",
+    "{\"source\":\"npm:pi-subagents\",\"scope\":\"user\"}": "0.89.1",
     "{\"source\":\"npm:pi-better\",\"scope\":\"user\"}": "0.2.0"
   }
 }
