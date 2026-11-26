@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { devNull } from "node:os";
 import { resolve as resolvePath } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getCapabilities, hyperlink, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
@@ -42,8 +43,16 @@ function execGit(cwd: string, args: string[]): Promise<string> {
   });
 }
 
-function readGitDiff(cwd: string): Promise<string> {
-  return execGit(cwd, ["diff", "--no-color", "--no-ext-diff", "--unified=0", "HEAD", "--"]);
+async function readGitDiff(cwd: string): Promise<string> {
+  let base: string;
+  try {
+    base = await execGit(cwd, ["rev-parse", "--verify", "--quiet", "HEAD"]);
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === 1)) throw error;
+    // Before the first commit, compare the worktree to Git's empty tree.
+    base = await execGit(cwd, ["hash-object", "-t", "tree", "--", devNull]);
+  }
+  return execGit(cwd, ["diff", "--no-color", "--no-ext-diff", "--unified=0", base.trim(), "--"]);
 }
 
 function readGitUntrackedFiles(cwd: string): Promise<string> {
@@ -325,14 +334,6 @@ function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
 
     const refreshDiffStats = async () => {
       if (disposed || refreshInFlight) return;
-
-      if (!footerData.getGitBranch()) {
-        if (diffStats !== null) {
-          diffStats = null;
-          tui.requestRender();
-        }
-        return;
-      }
 
       refreshInFlight = true;
       try {
