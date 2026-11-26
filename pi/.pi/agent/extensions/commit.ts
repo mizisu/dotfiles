@@ -63,7 +63,7 @@ Rules:
 - Prefer fewer safe commits over many brittle commits.
 - Use "all" for whole-file changes.
 - Use hunk index arrays only when one file contains clearly independent changes.
-- Assign each hunk to exactly one commit; never mix "all" and hunk selections for the same file.
+- If a commit uses "all" for a file, no other commit may list that file. When splitting by hunk instead, assign each hunk to exactly one commit.
 - New, deleted, renamed, binary, and mode-changed files must use "all" in exactly one commit.
 - Include all listed non-sensitive changed files exactly where they belong.
 - The git diff/status is the source of truth; session context is only a hint.
@@ -425,24 +425,28 @@ function normalizePlan(raw: unknown, changedFiles: Set<string>, diffByPath: Map<
 
   const fallbackFiles: Record<string, FileSpec> = {};
   for (const file of changedFiles) {
-    const specs = commits
-      .map((commit) => commit.files[file])
-      .filter((spec): spec is FileSpec => spec !== undefined);
+    const owners = commits.filter((commit) => Object.hasOwn(commit.files, file));
 
-    if (specs.length === 0) {
+    if (owners.length === 0) {
       fallbackFiles[file] = "all";
       continue;
     }
 
-    if (specs.includes("all")) {
-      if (specs.length > 1) throw new Error(`Overlapping commit plan for ${file}: whole-file changes belong in exactly one commit. Run /commit again.`);
+    const wholeFileOwner = owners.find((commit) => commit.files[file] === "all");
+    if (wholeFileOwner) {
+      if (owners.length > 1) {
+        for (const commit of owners) {
+          if (commit !== wholeFileOwner) delete commit.files[file];
+        }
+        warnings.push(`Removed overlapping selections for ${file}; the whole file belongs to "${wholeFileOwner.subject}".`);
+      }
       continue;
     }
 
     const diffFile = diffByPath.get(file);
     if (!diffFile || diffFile.hunks.length === 0) continue;
 
-    const allSelections = specs.flatMap((spec) => Array.isArray(spec) ? spec : []);
+    const allSelections = owners.flatMap(({ files }) => Array.isArray(files[file]) ? files[file] : []);
     const selected = new Set(allSelections);
     if (selected.size !== allSelections.length) {
       throw new Error(`Overlapping commit plan for ${file}: a hunk belongs to multiple commits. Run /commit again.`);
@@ -461,7 +465,7 @@ function normalizePlan(raw: unknown, changedFiles: Set<string>, diffByPath: Map<
     });
   }
 
-  return { commits, warnings };
+  return { commits: commits.filter((commit) => Object.keys(commit.files).length > 0), warnings };
 }
 
 function formatPlan(commits: PlanCommit[], warnings: string[], sensitiveSkipped: string[]): string {
