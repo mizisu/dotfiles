@@ -1,7 +1,4 @@
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 export type RexBlock = {
@@ -75,25 +72,6 @@ export function createRexFloat(
   return result.block_ids[0];
 }
 
-function liveNvim(socket: string): boolean {
-  if (!existsSync(socket)) return false;
-  return spawnSync("nvim", ["--server", socket, "--remote-expr", "1"], { timeout: 1_000, stdio: "ignore" }).status === 0;
-}
-
-async function editorSocket(ctx: ExtensionContext, session: string, parent: string): Promise<string | null> {
-  if (process.env.NVIM && liveNvim(process.env.NVIM)) return process.env.NVIM;
-  const blocks = rexBlocks(session);
-  const window = blocks.find((block) => block.block_id === parent)?.window_id;
-  const candidates = blocks.filter((block) => block.window_id === window).map((block) => ({
-    label: `Neovim [${block.block_id.slice(-6)}]`,
-    socket: join(homedir(), ".cache/nvim", `rex-${block.block_id.replace(/^block:/, "")}.pipe`),
-  })).filter((candidate) => liveNvim(candidate.socket));
-  if (candidates.length === 0) return ""; // lazygit's edit command opens a local editor.
-  if (candidates.length === 1) return candidates[0]!.socket;
-  const selected = await ctx.ui.select("lazygit: edit files in which Neovim?", candidates.map((item) => item.label));
-  return candidates.find((item) => item.label === selected)?.socket ?? null;
-}
-
 export async function openRexPopup(ctx: ExtensionContext, kind: "terminal" | "nvim" | "lazygit"): Promise<void> {
   const session = process.env.REX_SESSION!;
   const parent = process.env.REX_BLOCK!;
@@ -111,11 +89,7 @@ export async function openRexPopup(ctx: ExtensionContext, kind: "terminal" | "nv
     }
     let command: string[] | undefined;
     if (kind === "nvim") command = ["env", "-u", "NVIM", "nvim"];
-    if (kind === "lazygit") {
-      const socket = await editorSocket(ctx, session, parent);
-      if (socket === null) return;
-      command = ["env", `NVIM=${socket}`, "lazygit"];
-    }
+    if (kind === "lazygit") command = ["env", "-u", "NVIM", `PI_LAZYGIT_PARENT=${parent}`, "lazygit"];
     const block = createRexFloat(session, parent, label, ctx.cwd, command);
     if (kind === "nvim" || kind === "lazygit") rexCall("session.zoom_block", session, { block_id: block, zoom: true });
   } catch (error) {

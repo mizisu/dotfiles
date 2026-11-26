@@ -32,17 +32,8 @@ gui:
     authorColors:
       '*': '#b7bdf8'
 os:
-  edit: >-
-    if [ -n "$NVIM" ] && nvim --server "$NVIM" --remote-expr '1' >/dev/null 2>&1; then
-      nvim --server "$NVIM" --remote {{filename}} &&
-      nvim --server "$NVIM" --remote-send ':doautocmd User LazyGitEdit<CR>';
-    else nvim -- {{filename}}; fi
-  editAtLine: >-
-    if [ -n "$NVIM" ] && nvim --server "$NVIM" --remote-expr '1' >/dev/null 2>&1; then
-      nvim --server "$NVIM" --remote {{filename}} &&
-      nvim --server "$NVIM" --remote-send ':{{line}}<CR>' &&
-      nvim --server "$NVIM" --remote-send ':doautocmd User LazyGitEdit<CR>';
-    else nvim +{{line}} -- {{filename}}; fi
+  edit: '"$HOME/.local/bin/lazygit-edit" {{filename}}'
+  editAtLine: '"$HOME/.local/bin/lazygit-edit" {{filename}} {{line}}'
   editInTerminal: true
 customCommands:
   - key: 'G'
